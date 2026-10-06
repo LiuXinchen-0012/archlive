@@ -431,14 +431,15 @@ while IFS= read -r p; do
   if python3 -m py_compile "$p" 2>/tmp/e; then ok "$(basename "$p")"; else bad "$(basename "$p"): $(cat /tmp/e)"; fi
 done < <(find "$PROFILE_DIR" -name '*.py')
 
-  # ---------- 4b. shell 里内嵌的 Python（heredoc）----------
-  # .py 文件有 py_compile 兜着，但【嵌在 shell heredoc 里的 Python】没人管。
-  # 栽过：给 import 那行多打了两个空格，bash 不报错（heredoc 内容是字面量），
-  # 只有真正执行到才炸，报的还是 IndentationError 这种看着像代码问题的信息。
-  # 判据：把每个 <<'PY'…PY' 块抽出来 compile() 一次，纯语法检查、不执行。
+  # ⚠️ 这里【不要】用 EMBED_BAD=$(python3 ...) 收集输出。
+  #    成功时 Python 也会往 stdout 打印 "ok ..."，会被 $(...) 抓走，
+  #    于是 [[ -n "$EMBED_BAD" ]] 永远成立 -> 好端端的也判成 FAIL。
+  #    （栽过：CI 里 --fast 自检输出全绿却 exit 1，就是这个。）
+  #    正确姿势：所有信息走 stderr 直接显示，用【退出码】传递成败。
   head_ "4b. 内嵌 Python（heredoc）语法"
   if command -v python3 >/dev/null 2>&1; then
-    EMBED_BAD=$(python3 - "$PROFILE_DIR" <<'PYEMB' || true
+    EMBED_RC=0
+    python3 - "$PROFILE_DIR" <<'PYEMB' || EMBED_RC=$?
 import os, re, sys
 root = sys.argv[1]
 bad = 0
@@ -456,24 +457,23 @@ for dirpath, dirnames, filenames in os.walk(root):
         for tag, code in re.findall(r"<<'(PY[0-9A-Za-z_]*)'\n(.*?)\n\1", txt, re.S):
             total += 1
             try:
-                compile(code, tag, "exec")
+                compile(code, tag, 'exec')
             except SyntaxError as e:
                 bad += 1
-                print(f'  FAIL    {os.path.relpath(p, root)} 的 {tag} 块第 {e.lineno} 行: {e.msg}')
+                sys.stderr.write(f'  FAIL    {os.path.relpath(p, root)} 的 {tag} 块第 {e.lineno} 行: {e.msg}\n')
 if total == 0:
-    print('  ok      没有内嵌 Python 块')
-elif bad == 0:
-    print(f'  ok      {total} 个内嵌 Python 块语法都正确')
+    sys.stderr.write('  ok      没有内嵌 Python 块\n')
+elif bad:
+    sys.stderr.write(f'  FAIL    {total} 个内嵌 Python 块里有 {bad} 个语法错误\n')
+else:
+    sys.stderr.write(f'  ok      {total} 个内嵌 Python 块语法都正确\n')
 sys.exit(1 if bad else 0)
 PYEMB
-)
-    [[ -n "$EMBED_BAD" ]] && echo "$EMBED_BAD"
-    if [[ -n "$EMBED_BAD" ]]; then FAIL=1; else ok "内嵌 Python 语法检查通过"; fi
+    [[ $EMBED_RC -ne 0 ]] && FAIL=1
   else
-    warn "跳过（没有 python3）"
+    note "跳过（没有 python3）"
   fi
 
-# ---------- 5. shell 脚本是否带可执行位 ----------
 head_ "5. 可执行位"
 for s in "$PROFILE_DIR"/airootfs/usr/local/bin/*.sh; do
   [[ -f "$s" ]] || continue
