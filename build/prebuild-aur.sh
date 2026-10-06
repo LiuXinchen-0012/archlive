@@ -52,14 +52,26 @@ die()  { printf '\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 # ---------------------------------------------------------------------------
 # 0. 构建机自身的网络自检 —— 提前说清楚失败在哪
 # ---------------------------------------------------------------------------
-say "检查构建机到 GitHub 的连通性"
-if ! git ls-remote --exit-code -h https://github.com/SHORiN-KiWATA/shorin-dms-niri.git HEAD &>/dev/null; then
-  warn "连不上 github.com —— 构建机自己也需要代理才能编译这些包"
-  warn "先给这台构建机配好代理（临时设 https_proxy，或用 clash 客户端的全局模式）"
-  warn "配好后重跑本脚本"
-  die "GitHub 不可达"
-fi
-echo "  ok  GitHub 可达"
+  say "检查构建机到 GitHub 的连通性"
+  # ⚠️ 这里【绝对不能加 -h / --heads】。
+  #    --heads 把输出限制在 refs/heads/*，而 HEAD 是符号引用、不在 refs/heads/ 下面，
+  #    于是永远匹配不到任何 ref；配上 --exit-code 就是恒定返回 2 ——
+  #    等于不管网络通不通都会判定"GitHub 不可达"。（栽过，本地健康仓库都能复现。）
+  GH_PROBE="https://github.com/SHORiN-KiWATA/shorin-dms-niri.git"
+  if git ls-remote --exit-code "$GH_PROBE" HEAD &>/dev/null; then
+    echo "  ok  目标仓库可达"
+  elif git ls-remote --exit-code https://github.com/git/git.git HEAD &>/dev/null; then
+    # GitHub 本身通、只有目标仓库拉不到 —— 是仓库改名/转私有/被删，不是网络问题
+    warn "GitHub 本身可达，但目标仓库拉不到：$GH_PROBE"
+    warn "  → 多半是仓库改名、转为私有或已删除（不是网络问题，别去配代理）"
+    warn "  → 去 https://github.com/SHORiN-KiWATA 确认现在的仓库名，改本脚本里的 URL"
+    warn "  → shorin-dms-niri 是纯 dotfiles 包，拉不到只影响 Shorin 配置，装机本身不受影响"
+  else
+    warn "连不上 github.com —— 构建机自己也需要代理才能编译这些包"
+    warn "先给这台构建机配好代理（临时设 https_proxy，或用 clash 客户端的全局模式）"
+    warn "配好后重跑本脚本"
+    die "GitHub 不可达"
+  fi
 
 # ---------------------------------------------------------------------------
 # 1. 拉 PKGBUILD
