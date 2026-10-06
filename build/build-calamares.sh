@@ -112,6 +112,7 @@ PKG="$(ls -1t "$BUILD_DIR"/calamares-*.pkg.tar.zst 2>/dev/null | head -1)"
 say "安装到本地仓库 $REPO_DIR"
 sudo mkdir -p "$REPO_DIR"
 sudo cp "$PKG" "$REPO_DIR"/
+sudo rm -f "$REPO_DIR/calamares-shorin.db.tar.gz" "$REPO_DIR/calamares-shorin.db"  # repo-add 不带 -f，先清旧的
 sudo repo-add "$REPO_DIR/calamares-shorin.db.tar.gz" "$REPO_DIR"/calamares-*.pkg.tar.zst
 
 # ---- 4. 放置到 ISO 内可见的位置 --------------------------------------------

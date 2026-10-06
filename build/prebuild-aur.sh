@@ -107,10 +107,33 @@ for p in "${PKGS[@]}"; do
     warn "$p: 拉不到 PKGBUILD，跳过"
     continue
   fi
-  # AUR 有时把 source 拆到 .SRCINFO 旁边的文件里；这里把常见附属文件也拉下来
-  for extra in "$p.install" "$p.desktop" "$p.service" ".AURINFO"; do
-    curl -sfL --max-time 20 "https://aur.archlinux.org/cgit/aur.git/plain/$extra?h=$p" -o "$d/$extra" 2>/dev/null || true
-  done
+    # AUR 的附属文件（.install / .service / .desktop 等）要单独拉，
+    # 而且【不能靠猜文件名】—— 包名和文件名经常对不上：
+    #     dsearch-bin 这个包要的文件叫 dsearch.service，不是 dsearch-bin.service
+    # 猜错的话 makepkg 会报 "xxx was not found in the build directory"。
+    # 所以从 PKGBUILD 的 source=() 里把【非 URL 的文件名】全捞出来逐个下。
+    mapfile -t AURFILES < <(
+      tr '\n' ' ' < "$d/PKGBUILD" \
+      | grep -oE 'source(_x86_64)?=\(.*?\)' \
+      | sed -E 's/^source(_x86_64)?=\(//; s/\)$//' \
+      | tr -d '"'"'" \
+      | tr ' ' '\n' \
+      | grep -E '^[A-Za-z0-9][A-Za-z0-9._+-]*$' \
+      | sort -u
+    )
+    # 兜底：常见的几种命名
+    AURFILES+=("$p.install" "$p.desktop" "$p.service" ".AURINFO" "${p%-bin}.service")
+    mapfile -t AURFILES < <(printf '%s\n' "${AURFILES[@]}" | grep -E '^[A-Za-z0-9][A-Za-z0-9._+-]*$' | sort -u)
+    got=0
+    for extra in "${AURFILES[@]}"; do
+      [[ -f "$d/$extra" ]] && continue
+      if curl -sfL --max-time 20 "https://aur.archlinux.org/cgit/aur.git/plain/$extra?h=$p" -o "$d/$extra" 2>/dev/null; then
+        got=$((got + 1))
+      else
+        rm -f "$d/$extra"
+      fi
+    done
+    [[ $got -gt 0 ]] && echo "  附属文件拉到 $got 个"
   # 源码目录名未必等于包名，从 PKGBUILD 里读出来
   srcdir=$(sed -nE 's/^_?pkgname=//p' "$d/PKGBUILD" | head -1 | tr -d '"'"'"' ')
   echo "  源目录: ${srcdir:-$p}"
@@ -151,13 +174,31 @@ for p in "${PKGS[@]}"; do
       FAILED+=("$p")
       continue
     fi
-
-  built=$(ls -1t "$d"/*.pkg.tar.zst 2>/dev/null | head -1)
-  if [[ -n "$built" ]]; then
-    echo "  产物: $(basename "$built")  ($(du -h "$built" | cut -f1))"
-  else
-    warn "$p: 没找到产物"
-  fi
+    # 优先选主包：makepkg 常同时产出 xxx 和 xxx-debug，
+    # 用 `ls -1t` 按时间排会【捡到 -debug】（它后生成）。
+    built=""
+    for cand in "$d/$p-"*.pkg.tar.zst; do
+      [[ -f "$cand" ]] || continue
+      case "$(basename "$cand")" in
+        *-debug-*) continue ;;
+      esac
+      built="$cand"; break
+    done
+    [[ -n "$built" ]] || built=$(ls -1t "$d"/*.pkg.tar.zst 2>/dev/null | head -1)
+    if [[ -n "$built" ]]; then
+      echo "  产物: $(basename "$built")  ($(du -h "$built" | cut -f1))"
+      # ⚠️ 必须装进【构建机自己的 pacman 数据库】。
+      #    后面的包（比如 shorin-dms-niri）makepkg --syncdeps 时会去找前面编出来的
+      #    包；它们只躺在 build/repo 里的话，pacman 根本不知道，
+      #    会报 "target not found: dsearch-bin" 然后连锁失败。
+      if sudo pacman -U --noconfirm --nodeps "$built" >/dev/null 2>&1; then
+        echo "    已装入构建机（供后续包的 --syncdeps 解析）"
+      else
+        warn "  $p 没能装进构建机，后续依赖它的包可能失败"
+      fi
+    else
+      warn "$p: 没找到产物"
+    fi
 done
 
 # ---------------------------------------------------------------------------
@@ -205,7 +246,10 @@ done
 
 # repo-add 会重算依赖关系，所以要一起收
 say "生成仓库数据库"
-sudo repo-add -f "$REPO_DIR/arch-shorin.db.tar.gz" "$REPO_DIR"/*.pkg.tar.zst > /dev/null
+  # ⚠️ 不要加 -f。CI 里的 repo-add 报 "invalid option -- 'f'"，
+  #    多半是 pacman 版本/实现差异。删掉旧库再生成，效果一样且不会有兼容问题。
+  sudo rm -f "$REPO_DIR/arch-shorin.db.tar.gz" "$REPO_DIR/arch-shorin.db"
+  sudo repo-add "$REPO_DIR/arch-shorin.db.tar.gz" "$REPO_DIR"/*.pkg.tar.zst > /dev/null
 sudo cp "$REPO_DIR/arch-shorin.db.tar.gz" "$ISO_REPO"/
 # 旧脚本可能生成过 calamares-shorin.db.tar.gz，两个都留着
 [[ -f "$REPO_DIR/calamares-shorin.db.tar.gz" ]] && \
