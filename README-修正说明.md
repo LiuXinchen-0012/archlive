@@ -382,6 +382,9 @@ mirrorlist 文件，所以拆成了 `mirrorlist` + `mirrorlist.archlinuxcn` 两�
 
 ## 12. 下一步：构建与测试
 
+> 🩺 **卡住了先看 [`常见问题.md`](常见问题.md)** ——
+> 含 `Repository not found`（证书吊销检查失败）、凭据认证、Ctrl+V 失效等高频问题。
+>
 > ⚠️ **访问不了 GitHub 的话，先看 [`无GitHub构建方案.md`](无GitHub构建方案.md)** ——
 > 有不需要 GitHub 账号的 Docker 本地构建路线。
 

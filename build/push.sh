@@ -52,21 +52,83 @@ REMOTE="$(git remote get-url origin)"
 ok "origin = $REMOTE"
 
 # ---- 3. 解析出 用户名/仓库名 ----
+# ⚠️ 这里踩过坑：slug 是 host/owner/repo 三段，
+#    如果直接取第一段当 owner，会得到 "github.com" 而真正的用户名在第二段。
+#    结果就是打印出的 URL 变成 github.com/github.com/<user>/... —— 还把 host 拼进了 URL。
+step "解析 remote"
 SLUG="$(printf '%s' "$REMOTE" \
-  | sed -E 's|^git@([^:]+):(.+)$|\1/\2|; s|^https?://([^/]+)/(.+?)(/)?$|\1/\2|; s|\.git$||; s|/$||')"
+  | sed -E 's|^git@([^:]+):(.+)$|\1/\2|; s|^https?://([^/]+)/(.+)/?$|\1/\2|; s|\.git$||; s|/$||')"
+ok "remote slug = $SLUG"
 
+IFS='/' read -r HOST U1 U2 REST <<< "$SLUG"
 case "$SLUG" in
-  */*) : ;;
-  *) die "解析不出 用户名/仓库名，remote 格式可能不对：$REMOTE" ;;
+  */*/*)
+    # host/owner/repo
+    OWNER="$U1"
+    REPO="${U2%%/*}"
+    ;;
+  */*)
+    # owner/repo（SSH 形式，去掉 host 后是这种）
+    OWNER="$U1"
+    REPO="$U2"
+    ;;
+  *)
+    die "解析不出 用户名/仓库名，remote 格式可能不对：$REMOTE"
+    ;;
 esac
 
-OWNER="${SLUG%%/*}"
-REPO="${SLUG#*/}"
-[[ -n "$OWNER" && -n "$REPO" ]] || die "解析失败：$SLUG"
+if [[ "$HOST" == *.* ]]; then          # 第一段是域名
+  SCHEME="https://$HOST"
+else                                    # 第一段就是用户名（SSH 的 git@user:repo 形式）
+  SCHEME="https://github.com"
+  OWNER="$HOST"
+  REPO="$U1"
+fi
+
+[[ -n "$OWNER" && -n "$REPO" ]] || die "解析失败：host=$HOST owner=$OWNER repo=$REPO"
+if [[ "$OWNER" == *.* || "$REPO" == */* || -z "$REPO" ]]; then
+  die "解析结果不合理（owner=$OWNER repo=$REPO），请检查 remote：$REMOTE"
+fi
+ok "仓库 = $SCHEME/$OWNER/$REPO"
+
+# ---- 3b. 推送前先探测仓库是否可达 ----
+# 私有仓库 + 没授权的凭据，git 会报 "Repository not found"（GitHub 用 404 隐藏存在性）。
+# 先用 ls-remote 探一下，能立刻分辨是"没权限"还是"网络/名字错"，省得白传一次。
+step "检查仓库可达性"
+if git ls-remote --exit-code origin > /dev/null 2>&1; then
+  ok "仓库可访问"
+elif git ls-remote origin > /dev/null 2>&1; then
+  warn "仓库能访问但还是空的（首次推送前的正常状态）"
+else
+  cat <<EOF2
+  ✗ 访问不到远端仓库。
+
+  最可能的原因：仓库是 Private，但 git 拿到的凭据没有私有仓库权限
+  （GitHub 对无权限的私有仓库返回 404，报错就是 "Repository not found"）。
+
+  两种解法，二选一：
+
+  【A】把仓库改成 Public（推荐）
+      $SCHEME/$OWNER/$REPO/settings
+      → 页面最下方 Danger Zone → Change repository visibility → Public
+      → 改完直接重跑本脚本
+      好处：立刻能用，而且 Actions 分钟数变成无限
+
+  【B】重新授权，让凭据拿到私有仓库权限
+      打开 https://github.com/settings/connections/applications
+      找到 "Git Credential Manager" → Configure
+      权限里勾上 Private repositories（或 Repository access 包含你的仓库）
+      保存后重跑本脚本
+
+  如果都不是，可能是仓库名写错了 —— 确认一下：
+      $SCHEME/$OWNER/$REPO
+EOF2
+  exit 1
+fi
 
 # ---- 4. 推送 ----
 step "推送"
-git push -u origin HEAD || die "推送失败。用 https 的话：git remote set-url origin https://github.com/$OWNER/$REPO.git"
+git push -u origin HEAD || die "推送失败。远端地址：$SCHEME/$OWNER/$REPO.git"
 ok "已推送"
 
 # ---- 5. 打印 URL ----

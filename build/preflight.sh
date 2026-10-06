@@ -81,6 +81,73 @@ PY
 [[ $? -ne 0 ]] && FAIL=1
 
 # ---------- 2. 镜像源 ----------
+# ---------- 1b. workflow 自己的构建依赖也得验 ----------
+# ckbcomp 这个坑就是这么栽的：它被写在官方 AUR 的 calamares PKGBUILD 的 depends 里，
+# 但【它自己不在官方仓库】。在只有官方源的干净环境里 pacman -Syu ... ckbcomp 会
+# target not found，job 直接挂在第 4 步 —— 看起来像"CI 环境出问题"，
+# 其实就是个包名问题。所以 workflow 里手写的依赖列表也得过这一关。
+head_ "1b. 校验 workflow 的构建依赖列表"
+WF="$PROFILE_DIR/.github/workflows/build-iso.yml"
+if [[ -f "$WF" ]] && command -v python3 >/dev/null 2>&1; then
+  python3 - "$TMP" "$WF" <<'PY2' || FAIL=1
+import os, re, sys, tarfile
+
+tmp, wf = sys.argv[1], sys.argv[2]
+
+have = set()
+for db in ('core', 'extra', 'multilib'):
+    path = os.path.join(tmp, db + '.db')
+    if not os.path.exists(path):
+        continue
+    with tarfile.open(path) as t:
+        for m in t.getmembers():
+            if not m.name.endswith('/desc'):
+                continue
+            L = t.extractfile(m).read().decode('utf-8', 'replace').splitlines()
+            for i, line in enumerate(L):
+                if line.strip() == '%NAME%':
+                    have.add(L[i + 1].strip())
+                    break
+
+# 逐行读，不用正则 —— YAML 缩进和续行太容易骗过正则了
+lines = open(wf, encoding='utf-8').read().splitlines()
+pkgs, collecting = [], False
+for raw in lines:
+    line = raw.strip()
+    if line.startswith('#'):
+        continue
+    if not collecting:
+        if line.startswith('pacman -Syu'):
+            collecting = True
+            tail = line.split('needed', 1)[-1].strip()
+            if tail:
+                pkgs += tail.split()
+        continue
+    # 续行：以 \ 结尾说明还有下一段
+    body = line[:-1] if line.endswith('\\') else line
+    pkgs += body.split()
+    if not line.endswith('\\'):
+        break
+
+pkgs = [p for p in pkgs if re.fullmatch(r'[a-z0-9][a-z0-9+._-]*', p)]
+
+if not pkgs:
+    print('  WARN    没能从 workflow 里解析出依赖列表（格式可能变了，跳过）')
+    sys.exit(0)
+
+missing = [p for p in pkgs if p not in have]
+print(f'  解析出 {len(pkgs)} 个构建依赖，官方仓库共 {len(have)} 个包')
+if missing:
+    print('  FAIL    官方仓库里【不存在】: ' + ', '.join(missing))
+    print('          → 官方仓库没有的包必须从 AUR 编译（prebuild-aur.sh）；')
+    print('            若是运行时依赖，就靠 [build] 源进 ISO，不要写进这一步。')
+    sys.exit(1)
+print('  ok      全部存在于官方仓库')
+PY2
+else
+  warn "跳过（找不到 workflow 或 python3）"
+fi
+
 head_ "2. 校验 mirrorlist 中每个源"
 ML="$PROFILE_DIR/airootfs/etc/pacman.d/mirrorlist"
 MLCN="$PROFILE_DIR/airootfs/etc/pacman.d/mirrorlist.archlinuxcn"
@@ -354,6 +421,19 @@ if [[ $GITHUB_FREE -eq 1 ]]; then
 else
   warn "⚠ 装机时仍会访问 GitHub：$GITHUB_WHY"
   warn "  没代理的话，这几项会拉不动。"
+fi
+
+# ---------- 9c2. 换行符（CRLF 会让 CI 上每个脚本都炸）----------
+head_ "9c2. .gitattributes（防止 CRLF 破坏 CI）"
+GA="$PROFILE_DIR/.gitattributes"
+if [[ -f "$GA" ]]; then
+  ok ".gitattributes 存在"
+  if grep -q 'eol=lf' "$GA"; then ok "已声明 eol=lf"
+  else bad ".gitattributes 里没有 eol=lf —— CRLF 会让 CI 上的脚本全部报错"; fi
+  if grep -qE '\*\.sh.*eol=lf|\* text=auto eol=lf' "$GA"; then ok ".sh 会被强制 LF"
+  else bad ".sh 没被显式指定（虽然通配规则可能覆盖，但显式更稳）"; fi
+else
+  bad "缺少 .gitattributes —— Windows 上 push 上去的 .sh 会是 CRLF，CI 里全崩"
 fi
 
 # ---------- 9c. 预装常用软件 ----------

@@ -12,11 +12,16 @@
 #
 # 依赖结构（2026-10-05 实测 shorin-dms-niri-git r142.ccf9e8d-2）：
 #   15 个核心依赖里 14 个在官方仓库（清华/中科大源，很快）
-#   真正要 AUR 编译的只有 4 个：
+#   真正要 AUR 编译的只有 5 个：
+#     ckbcomp               Perl 脚本（键盘布局预览）—— 官方仓库【没有】，只在这
 #     dsearch-bin           二进制包（GitHub Releases 下载）
 #     dgop                  Go（GitHub tarball）
 #     xwayland-satellite    Rust（GitHub tarball）
 #     shorin-dms-niri-git   纯 dotfiles（git clone）★ 唯一必须 clone 的
+#
+#   ⚠️ ckbcomp 这个坑值得记一笔：它写在官方 AUR 的 calamares PKGBUILD 的
+#      depends 里，但【它自己不在官方仓库】。在只有官方源的干净环境里
+#      `pacman -S ckbcomp` 会直接 target not found。
 #
 # 用法：普通用户 + sudo
 #   bash build/prebuild-aur.sh              # 全部
@@ -31,6 +36,7 @@ PKGDIR="${PKGDIR:-$PROFILE_DIR/build/aur-pkgs}"
 ONLY="${ONLY:-}"
 
 PKGS=(
+  ckbcomp              # Calamares 运行时依赖（键盘布局预览），官方仓库没有，只在 AUR
   dsearch-bin
   dgop
   xwayland-satellite

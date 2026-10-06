@@ -41,6 +41,11 @@ jobs:
       PREBUILD_AUR: ${{ github.event.inputs.prebuild_aur || 'true' }}
       KEEP_AUR: ${{ github.event.inputs.keep_aur || 'true' }}
 
+    # ⚠️ 「容器内准备」那一步【不要】加 ckbcomp。
+    #    它是 Calamares 的运行时依赖（键盘页预览键盘布局用），
+    #    但它【不在官方仓库】，只有 AUR 有 —— 在只有官方源的环境里
+    #    pacman -S ckbcomp 会直接 target not found，整个 job 就挂在这一步。
+    #    它由 prebuild-aur.sh 从 AUR 编译后放进 [build] 源，最终进 ISO。
     steps:
       - name: 取回 profile
         uses: actions/checkout@v4
@@ -57,7 +62,7 @@ jobs:
             git curl wget sudo rsync \
             base-devel cmake ninja extra-cmake-modules libglvnd \
             qt6-base qt6-declarative qt6-svg qt6-tools qt6-translations \
-            kcoreaddons kpmcore yaml-cpp libpwquality hwinfo parted ckbcomp \
+            kcoreaddons kpmcore yaml-cpp libpwquality hwinfo parted \
             archiso squashfs-tools libisoburn dosfstools mtools \
             nodejs npm
 
