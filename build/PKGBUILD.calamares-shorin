@@ -25,14 +25,16 @@
 
 pkgname=calamares
 pkgver=3.4.2
-pkgrel=9.shorin
+# ⚠️ pkgrel 必须是 整数[.整数] —— 写成 "9.shorin" 会被 makepkg 直接拒掉：
+#     ERROR: pkgrel must be of the form 'integer[.integer]', not 9.shorin.
+#    想标记"打过补丁"不能塞进 pkgrel，pkgdesc 里已经写了 ARCH_SHORIN patched，
+#    真要区分版本就把后缀放 pkgver（pkgver 允许字母和点）。
+pkgrel=10
 pkgdesc="Distribution-independent installer framework (ARCH_SHORIN patched)"
 arch=('x86_64')
 url="https://codeberg.org/Calamares/calamares"
 license=("GPL-3.0-or-later")
 provides=('calamares-framework')
-# 明确覆盖掉 AUR/其他源可能提供的同名包，保证 ISO 里用的是打过补丁的这份
-replaces=('calamares')
 
 depends=(
   kcoreaddons
@@ -99,8 +101,7 @@ build() {
     -DKDE_INSTALL_LOCALEDIR=/usr/share/locale \
     -DKDE_INSTALL_MANDIR=/usr/share/man \
     -DKDE_INSTALL_INFODIR=/usr/share/info \
-    -DKDE_INSTALL_SYSCONFDIR=/etc \
-    -Wno-dev
+    -DKDE_INSTALL_SYSCONFDIR=/etc
   cmake --build build
 }
 

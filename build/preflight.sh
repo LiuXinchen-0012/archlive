@@ -3,6 +3,13 @@
 # 只依赖 curl + tar + python3，不需要是 Arch 机器。
 set -uo pipefail
 
+# --fast：只跑【不依赖已编译产物】的静态检查。
+#
+# 为什么需要：CI 里 preflight 原本排在编译 Calamares【之后】，
+# 结果就是每次都先花十几分钟编 Qt，再被包名/PKGBUILD 字段之类的低级问题打死。
+# --fast 让这些检查提前到编译之前跑，几分钟内就知道对不对。
+FAST=0
+if [[ "${1:-}" == "--fast" ]]; then FAST=1; shift; fi
 PROFILE_DIR="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 MIRROR="${MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/archlinux}"
 TMP="$(mktemp -d)"
@@ -14,13 +21,27 @@ warn() { printf '  \033[33mWARN\033[0m    %s\n' "$*"; FAIL=1; }
 bad()  { printf '  \033[31mFAIL\033[0m    %s\n' "$*"; FAIL=1; }
 head_() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 
+# ---------- 仓库 DB 下载 ----------
+# 必须【无条件】执行，且要放在最前面：
+#   - 1b / 1c / 9d 都要拿它当基准，只在第 1 节里下的话，--fast 模式会全盘误报
+#   - 以前这里是 `[[ "$db" == multilib ]] && continue`，CI 里 multilib.db 根本没下过，
+#     任何 multilib 包都会被当成"不存在"。三个库都要下。
+fetch_repo_dbs() {
+  for db in core extra multilib; do
+    if [[ ! -s "$TMP/$db.db" ]]; then
+      if ! curl -sfL --max-time 120 "$MIRROR/$db/os/x86_64/$db.db" -o "$TMP/$db.db"; then
+        echo "  WARN    $db.db 拉取失败，相关校验会不准" >&2
+        rm -f "$TMP/$db.db"
+      fi
+    fi
+  done
+}
+fetch_repo_dbs
+
 # ---------- 1. 包名 ----------
+if [[ $FAST -eq 0 ]]; then   # 依赖已编译产物，--fast 模式跳过
 head_ "1. 校验 packages.x86_64 中的包名"
-for db in core extra multilib; do
-  [[ "$db" == multilib ]] && continue
-  curl -sfL --max-time 90 "$MIRROR/$db/os/x86_64/$db.db" -o "$TMP/$db.db" \
-    || { bad "无法下载 $db.db（检查网络/镜像）"; continue; }
-done
+[[ -s "$TMP/core.db" ]] || bad "仓库数据库没下下来，1/1b/1c 的结论都不可信"
 
 python3 - "$TMP" "$PROFILE_DIR/packages.x86_64" <<'PY'
 import tarfile, sys, os
@@ -86,6 +107,7 @@ PY
 # 但【它自己不在官方仓库】。在只有官方源的干净环境里 pacman -Syu ... ckbcomp 会
 # target not found，job 直接挂在第 4 步 —— 看起来像"CI 环境出问题"，
 # 其实就是个包名问题。所以 workflow 里手写的依赖列表也得过这一关。
+fi
 head_ "1b. 校验 workflow 的构建依赖列表"
 WF="$PROFILE_DIR/.github/workflows/build-iso.yml"
 if [[ -f "$WF" ]] && command -v python3 >/dev/null 2>&1; then
@@ -468,6 +490,7 @@ else
 fi
 
 # ---------- 9. 本地 [build] 仓库（自编译 Calamares）----------
+if [[ $FAST -eq 0 ]]; then   # 依赖已编译产物，--fast 模式跳过
 head_ "9. 本地 [build] 仓库（自编译 Calamares）"
 BUILD_REPO="$PROFILE_DIR/airootfs/etc/pacman.d/build-repo"
 if [[ -d "$BUILD_REPO" ]]; then
@@ -517,6 +540,8 @@ else
 fi
 
 # ---------- 9b. 是否真的"装机零 GitHub" ----------
+fi
+if [[ $FAST -eq 0 ]]; then   # 依赖已编译产物，--fast 模式跳过
 head_ "9b. 装机零 GitHub 自检（决定你到底需不需要代理）"
 BUNDLED_TP="$PROFILE_DIR/airootfs/usr/local/lib/shorin/tpclash.bin"
 GITHUB_FREE=1
@@ -543,6 +568,79 @@ else
 fi
 
 # ---------- 9c2. 换行符（CRLF 会让 CI 上每个脚本都炸）----------
+fi
+head_ "9d. PKGBUILD 字段（makepkg 会当场拒掉的那些）"
+PKGB="$PROFILE_DIR/build/PKGBUILD.calamares-shorin"
+if [[ -f "$PKGB" ]]; then
+  # 纯文本解析，不 source —— source 会牵扯函数定义/变量展开，
+  # 一旦 PKGBUILD 里引用了未定义变量就会误报"语法错误"。
+  PKGREL_VAL="$(sed -n 's/^[[:space:]]*pkgrel=//p' "$PKGB" | head -1 | tr -d "'\"" )"
+  PKGVER_VAL="$( sed -n 's/^[[:space:]]*pkgver=//p'  "$PKGB" | head -1 | tr -d "'\"" )"
+  PKGNAME_VAL="$(sed -n 's/^[[:space:]]*pkgname=//p' "$PKGB" | head -1 | tr -d "'\"")"
+
+  if [[ -z "$PKGNAME_VAL" ]]; then
+    echo "  FAIL    读不到 pkgname"; FAIL=1
+  else
+    echo "  ok      pkgname = $PKGNAME_VAL"
+  fi
+
+  # pkgrel 必须是 整数[.整数]。写成 "9.shorin" 这类会被 makepkg 当场拒掉：
+  #   ERROR: pkgrel must be of the form 'integer[.integer]', not 9.shorin.
+  if [[ "$PKGREL_VAL" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    echo "  ok      pkgrel  = $PKGREL_VAL  (整数[.整数])"
+  else
+    echo "  FAIL    pkgrel = '$PKGREL_VAL' 非法"
+    echo "          → makepkg 会直接拒绝：pkgrel must be of the form 'integer[.integer]'"
+    echo "          → 补丁版的身份请写进 pkgdesc；pkgrel 里【只能放数字】"
+    FAIL=1
+  fi
+
+  if [[ "$PKGVER_VAL" =~ ^[0-9A-Za-z.+_~]+$ ]]; then
+    echo "  ok      pkgver  = $PKGVER_VAL"
+  else
+    echo "  FAIL    pkgver = '$PKGVER_VAL' 非法"; FAIL=1
+  fi
+
+  # source 和 sha256sums 条数必须一致，否则 makepkg 拒绝。
+  # 注意 source 可能是【单行数组】source=("a::b")，用 awk 从下一行开始数会把
+  # 后面注释也数进去 —— 这里交给 python 按引号数，最省事。
+  if command -v python3 >/dev/null 2>&1; then
+    PKG_COUNT_OUT="$(python3 - "$PKGB" <<'PY2'
+import re, sys
+txt = open(sys.argv[1], encoding='utf-8').read()
+
+
+def array_len(name):
+    m = re.search(r'^' + name + r'=\((.*?)\)', txt, re.S | re.M)
+    if not m:
+        return -1
+    body = m.group(1)
+    body = re.sub(r'#[^\n]*', '', body)
+    if not body.strip():
+        return 0
+    q = re.findall(r'"([^"]*)"|\'([^\']*)\'', body)
+    if q:
+        return len(q)
+    return len([t for t in body.split() if t])
+
+
+print(f'{array_len("source")} {array_len("sha256sums")}')
+PY2
+)"
+    NSRC="${PKG_COUNT_OUT%% *}"
+    NSUM="${PKG_COUNT_OUT##* }"
+  else
+    NSRC=-1; NSUM=-1
+  fi
+  if [[ "$NSRC" == "$NSUM" && "$NSRC" -gt 0 ]]; then
+    echo "  ok      source($NSRC) 与 sha256sums($NSUM) 条数一致"
+  else
+    echo "  FAIL    source=$NSRC / sha256sums=$NSUM 条数不一致或为 0"; FAIL=1
+  fi
+else
+  warn "跳过（找不到 PKGBUILD）"
+fi
+
 head_ "9c2. .gitattributes（防止 CRLF 破坏 CI）"
 GA="$PROFILE_DIR/.gitattributes"
 if [[ -f "$GA" ]]; then
@@ -556,6 +654,7 @@ else
 fi
 
 # ---------- 9c. 预装常用软件 ----------
+if [[ $FAST -eq 0 ]]; then   # 依赖已编译产物，--fast 模式跳过
 head_ "9c. 预装常用软件"
 CA="$PROFILE_DIR/airootfs/usr/local/bin/common-apps.sh"
 if [[ -f "$CA" ]]; then
@@ -598,6 +697,7 @@ else
 fi
 
 # ---------- 10. Calamares 配置 ----------
+fi
 head_ "10. Calamares 配置"
 CAL_DIR="$PROFILE_DIR/airootfs/etc/calamares"
 [[ -f "$CAL_DIR/settings.conf" ]] && ok "settings.conf 存在" || bad "缺少 settings.conf"

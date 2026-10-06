@@ -183,6 +183,14 @@ jobs:
           bash "$PROFILE_DIR/build/use-mirror.sh" official
           head -8 "$PROFILE_DIR/airootfs/etc/pacman.d/mirrorlist"
 
+      # ⭐ 这一步【必须在编译 Calamares 之前】。
+      # 之前 preflight 排在编译之后，结果每轮都是：先花 10~25 分钟编 Qt，
+      # 再被 pkgrel 格式、包名写错这种几秒钟就能查出来的问题打死。
+      # --fast 只跑不依赖已编译产物的静态检查，2~3 分钟出结果。
+      - name: 静态自检（编译前）
+        shell: bash
+        run: bash "$PROFILE_DIR/build/preflight.sh" --fast "$PROFILE_DIR"
+
       - name: 编译 Calamares
         shell: bash
         run: |
