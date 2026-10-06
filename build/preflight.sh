@@ -289,6 +289,35 @@ else
   warn "跳过（没有 python3）"
 fi
 
+head_ "1d. makepkg 调用是否漏了 --syncdeps"
+# makepkg 默认【不会】自动安装依赖，只会报
+#     ==> Missing dependencies:  -> go
+# 然后失败。之前 dgop / xwayland-satellite / shorin-dms-niri 三个包
+# 全是因为漏了 --syncdeps 而挂，一个白等好几分钟。
+# 唯一允许的例外是显式写了 --nodeps（那是明知道要跳过）。
+# 只认【真正的调用】：makepkg 后面跟着 -flag 的才算。
+# `command -v makepkg`、注释里提到 makepkg 的都不能算，否则满屏误报。
+MK_BAD=$(
+  grep -rn "makepkg" --include="*.sh" "$PROFILE_DIR" 2>/dev/null \
+    | sed 's/#.*//' \
+    | grep -E "makepkg[[:space:]]+-" \
+    | grep -vE -- "--syncdeps|--nodeps|(^|[[:space:]])-d([[:space:]]|$)" \
+    | grep -v "build-calamares.sh" \
+    || true
+)
+# build-calamares.sh 是刻意的例外：它用自己的 DEPS 数组显式装依赖，
+# 【不能】用 --syncdeps —— calamares 的运行时依赖里有 ckbcomp，
+# 而 ckbcomp 此刻还没编出来（要等 prebuild-aur），--syncdeps 解析不了会直接失败。
+# 它靠后面那道 "--nodeps 自动降级" 兜底。
+if [[ -n "$MK_BAD" ]]; then
+  echo "  FAIL    这些 makepkg 调用没带 --syncdeps，会因缺依赖失败："
+  echo "$MK_BAD" | sed 's/^/            /'
+  echo "          → 加上 --syncdeps（运行用户需要有 sudo）"
+  FAIL=1
+else
+  echo "  ok      所有 makepkg 调用都带 --syncdeps 或显式 --nodeps"
+fi
+
 head_ "2. 校验 mirrorlist 中每个源"
 ML="$PROFILE_DIR/airootfs/etc/pacman.d/mirrorlist"
 MLCN="$PROFILE_DIR/airootfs/etc/pacman.d/mirrorlist.archlinuxcn"

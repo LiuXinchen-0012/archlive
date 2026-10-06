@@ -49,6 +49,23 @@ die()  { printf '\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
 [[ $EUID -ne 0 ]] || die "请用普通用户运行（makepkg 不允许 root）"
 
+  # ---------------------------------------------------------------------------
+  # -1. 给 curl 套一层 --http1.1 的壳
+  #
+  # ckbcomp 的源码托管在 salsa.debian.org（Debian 的 GitLab），那边会偶发
+  # HTTP/2 帧错误：
+  #     curl: (92) [HTTP2] [1] received invalid frame: ... error -532
+  # 这是传输层问题，跟包本身无关，换成 HTTP/1.1 就稳。
+  # makepkg 内部就是调 curl，把这个壳放到 PATH 前面即可全局生效。
+  SHIMDIR="$HOME/.cache/archlive-bin"
+  mkdir -p "$SHIMDIR"
+  cat > "$SHIMDIR/curl" <<'SHIM'
+#!/usr/bin/env bash
+exec /usr/bin/curl --http1.1 "$@"
+SHIM
+  chmod +x "$SHIMDIR/curl"
+  export PATH="$SHIMDIR:$PATH"
+
 # ---------------------------------------------------------------------------
 # 0. 构建机自身的网络自检 —— 提前说清楚失败在哪
 # ---------------------------------------------------------------------------
@@ -77,6 +94,7 @@ die()  { printf '\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 # 1. 拉 PKGBUILD
 # ---------------------------------------------------------------------------
 mkdir -p "$PKGDIR"
+  FAILED=()
 
 for p in "${PKGS[@]}"; do
   [[ -n "$ONLY" && "$p" != "$ONLY" ]] && continue
@@ -97,10 +115,42 @@ for p in "${PKGS[@]}"; do
   srcdir=$(sed -nE 's/^_?pkgname=//p' "$d/PKGBUILD" | head -1 | tr -d '"'"'"' ')
   echo "  源目录: ${srcdir:-$p}"
 
-  if ! ( cd "$d" && makepkg -f --noconfirm --clean 2>&1 | tail -25 ); then
-    warn "$p: 编译失败，跳过（不阻断其它包）"
-    continue
-  fi
+    # ⚠️ 必须加 --syncdeps。
+    #    makepkg 默认【不会】自动装依赖，只会告诉你缺什么然后失败：
+    #      dgop               缺 go
+    #      xwayland-satellite 缺 xorg-xwayland
+    #      shorin-dms-niri    缺 dms-shell / niri / libnotify / cava … 一堆
+    #    全是这一条造成的。builder 有免密 sudo，--syncdeps 才跑得动。
+    #
+    # 下载类失败自动重试：传输层抽风重试就好，真编译不过就别白等。
+    MKLOG="$d/makepkg-attempt.log"
+    rc=1
+    for attempt in 1 2 3; do
+      set +e
+      ( cd "$d" && makepkg -f --noconfirm --clean --syncdeps ) >"$MKLOG" 2>&1
+      rc=$?
+      set -e
+      tail -25 "$MKLOG"
+      [[ $rc -eq 0 ]] && break
+      if grep -qiE "curl: \(|Failure while downloading|Could not resolve host|timed out|Connection reset" "$MKLOG"; then
+        if [[ $attempt -lt 3 ]]; then
+          warn "$p: 下载/网络失败，重试 ($attempt/3)"
+          sleep 5
+          continue
+        fi
+      fi
+      break
+    done
+
+    if [[ $rc -ne 0 ]]; then
+      if grep -qiE "Missing dependencies|Could not resolve all dependencies" "$MKLOG"; then
+        warn "$p: 依赖装不上（看上面 Missing dependencies 列了哪些包）"
+      else
+        warn "$p: 编译失败，跳过（不阻断其它包）"
+      fi
+      FAILED+=("$p")
+      continue
+    fi
 
   built=$(ls -1t "$d"/*.pkg.tar.zst 2>/dev/null | head -1)
   if [[ -n "$built" ]]; then
@@ -114,16 +164,38 @@ done
 # 2. 汇总进本地仓库
 # ---------------------------------------------------------------------------
 say "汇总到本地仓库"
-BUILT=()
-for p in "${PKGS[@]}"; do
-  [[ -n "$ONLY" && "$p" != "$ONLY" ]] && continue
-  f=$(ls -1 "$PKGDIR/$p"/*.pkg.tar.zst 2>/dev/null | head -1)
-  [[ -n "$f" ]] && BUILT+=("$f")
-done
+  BUILT=()
+  for p in "${PKGS[@]}"; do
+    [[ -n "$ONLY" && "$p" != "$ONLY" ]] && continue
+    # ⚠️ 这里【必须】|| true。
+    #    一个包都没产出时 `ls` 退出码是 2，而 set -e 下"赋值语句"会直接带崩脚本 ——
+    #    于是本该显示的 "一个包都没编出来" 永远不会出现，
+    #    用户只看到莫名其妙的 "Error: exit code 2"。（栽过）
+    f=$(ls -1t "$PKGDIR/$p"/*.pkg.tar.zst 2>/dev/null | head -1) || true
+    if [[ -n "$f" ]]; then
+      BUILT+=("$f")
+    else
+      FAILED+=("$p")
+    fi
+  done
 
-if [[ ${#BUILT[@]} -eq 0 ]]; then
-  die "一个包都没编出来，检查上面的错误"
-fi
+  # 去重（一个包可能在建循环和收集阶段各失败一次）
+  mapfile -t UNIQ_FAILED < <(printf '%s\n' "${FAILED[@]-}" | awk 'NF' | sort -u)
+
+  if [[ ${#BUILT[@]} -eq 0 ]]; then
+    die "一个包都没编出来。失败清单: ${UNIQ_FAILED[*]-无}"
+  fi
+
+  if [[ ${#UNIQ_FAILED[@]} -gt 0 ]]; then
+    warn "以下包没编出来: ${UNIQ_FAILED[*]}"
+    warn "  → 装机时这些功能会缺，需要之后手动补装"
+    case " ${UNIQ_FAILED[*]} " in
+      *" ckbcomp "*)
+        warn "  → ⚠️ ckbcomp 缺失会直接让 calamares 依赖解析失败"
+        warn "  → ISO 构建阶段会报错，第 7 步得先把它编出来"
+        ;;
+    esac
+  fi
 
 sudo mkdir -p "$REPO_DIR" "$ISO_REPO"
 for f in "${BUILT[@]}"; do
