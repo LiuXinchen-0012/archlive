@@ -1,0 +1,2 @@
+# live 用户需要 sudo 才能启动 Calamares（ Calamares 必须 root 运行）
+live ALL=(ALL) NOPASSWD: ALL
