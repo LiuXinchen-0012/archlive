@@ -148,6 +148,125 @@ else
   warn "跳过（找不到 workflow 或 python3）"
 fi
 
+# ---------- 1c. 扫脚本里内嵌的包名 ----------
+# ckbcomp 这个坑栽了两次：一次在 workflow 的依赖列表，一次在
+# build-calamares.sh 的 DEPS 数组。只查 packages.x86_64 抓不到它们。
+#
+# 这里只认两种结构（数组声明 + try_install），【不扫单行 pacman -S】：
+# 正则去匹配命令行必然把 case 标签、die 的报错文案、多行引号字符串
+# 全捞进来，误报多到没法用 —— 一个天天误报的检查等于没检查。
+head_ "1c. 扫脚本里内嵌的包名"
+if command -v python3 >/dev/null 2>&1; then
+  python3 - "$TMP" "$PROFILE_DIR" <<'PY2' || FAIL=1
+import os, re, sys, tarfile
+
+tmp, root = sys.argv[1], sys.argv[2]
+
+have = set()
+for db in ('core', 'extra', 'multilib'):
+    path = os.path.join(tmp, db + '.db')
+    if not os.path.exists(path):
+        continue
+    with tarfile.open(path) as t:
+        for m in t.getmembers():
+            if not m.name.endswith('/desc'):
+                continue
+            L = t.extractfile(m).read().decode('utf-8', 'replace').splitlines()
+            for i, line in enumerate(L):
+                if line.strip() == '%NAME%':
+                    have.add(L[i + 1].strip())
+                    break
+
+# prebuild-aur.sh 会从 AUR 编好、放进 [build] 源的包 —— 这些是合法来源
+PROVIDED = {'calamares'}
+pb = os.path.join(root, 'build', 'prebuild-aur.sh')
+if os.path.exists(pb):
+    m = re.search(r'^PKGS=\(\s*\n(.*?)\n\s*\)', open(pb, encoding='utf-8').read(), re.S | re.M)
+    if m:
+        for line in m.group(1).split('\n'):
+            line = line.split('#')[0].strip()
+            if re.fullmatch(r'[a-z0-9][a-z0-9+._-]{1,}', line):
+                PROVIDED.add(line)
+
+PKGRE = re.compile(r'[a-z0-9][a-z0-9+._-]{1,}')
+found = {}       # 包名 -> {(文件, 数组名)}
+removal = set() # 属于"删除类"数组的包名
+
+
+def add(tok, src, arr, is_removal):
+    tok = tok.strip()
+    # 纯 shell 语法一律不算包名
+    if tok in ('sudo', 'pacman', 'yay', 'paru', 'true', 'false'):
+        return
+    if PKGRE.fullmatch(tok):
+        found.setdefault(tok, set()).add((src, arr))
+        if is_removal:
+            removal.add(tok)
+
+
+for dirpath, dirnames, filenames in os.walk(root):
+    dirnames[:] = [d for d in dirnames if d not in ('.git', 'node_modules')]
+    for fn in filenames:
+        if not fn.endswith(('.sh', '.conf')):
+            continue
+        path = os.path.join(dirpath, fn)
+        rel = os.path.relpath(path, root)
+        if rel.endswith('build/preflight.sh'):
+            continue   # 检查器不扫自己：里面的嵌入式 python 会污染结果
+        try:
+            txt = open(path, encoding='utf-8').read()
+        except Exception:
+            continue
+
+        # 兼容两种写法：DEPS=(a b c\n  d e) 和 DEPS=(\n  a b c\n)
+        for m in re.finditer(r'^[ \t]*([A-Z][A-Z0-9_]*)[ \t]*=[ \t]*\(([^)]*)\)',
+                             txt, re.S | re.M):
+            arr = m.group(1)
+            # 删除类数组：包名过期只会让那个包被跳过，不会坏事
+            is_rem = bool(re.search(r'KDE_PKGS|REMOVE|DELETE|PURGE|UNINSTALL', arr))
+            for line in m.group(2).split('\n'):
+                line = line.split('#')[0].strip()
+                # 数组里一行应该【只】是包名；出现 shell 语法说明是命令或表达式
+                if line and not re.search(r'[(){}=$|&;<>"\'`]', line):
+                    for tok in line.split():
+                        add(tok, rel, arr, is_rem)
+
+        # try_install "pkg" "pkg"
+        for m in re.finditer(r'try_install[ \t]+([^\n&|;]+)', txt):
+            for a, b in re.findall(r'"([^"]+)"|\'([^\']+)\'', m.group(1)):
+                add(a or b, rel, 'try_install', False)
+
+unknown = sorted(p for p in found if p not in have and p not in PROVIDED)
+hard    = [p for p in unknown if p not in removal]
+soft    = [p for p in unknown if p in removal]
+
+print(f'  扫描到 {len(found)} 个包名；官方仓库 {len(have)} 个，[build] 源另有 {len(PROVIDED - {"calamares"})} 个')
+print('  [build] 源提供: ' + ', '.join(sorted(PROVIDED)))
+
+if soft:
+    print(f'  WARN    删除类数组里有 {len(soft)} 个包名在仓库中不存在:')
+    for p in soft:
+        for src, arr in sorted(found[p]):
+            print(f'            {p}  ←  {src} [{arr}]')
+    print('          这些通常被 pacman -Qq 守卫跳过，不会坏事；但该删的包可能没删掉。')
+
+if hard:
+    print('  FAIL    既不在官方仓库、也不在 prebuild-aur.sh 预编译列表:')
+    for p in hard:
+        for src, arr in sorted(found[p]):
+            print(f'            {p}  ←  {src} [{arr}]')
+    print('          → 改用官方包名，或把它加进 prebuild-aur.sh 的 PKGS 由 AUR 编译')
+    sys.exit(1)
+
+if not soft:
+    print('  ok      全部可解析')
+else:
+    print('  ok      硬依赖全部可解析')
+PY2
+else
+  warn "跳过（没有 python3）"
+fi
+
 head_ "2. 校验 mirrorlist 中每个源"
 ML="$PROFILE_DIR/airootfs/etc/pacman.d/mirrorlist"
 MLCN="$PROFILE_DIR/airootfs/etc/pacman.d/mirrorlist.archlinuxcn"

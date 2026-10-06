@@ -26,9 +26,41 @@ command -v makepkg > /dev/null || die "没装 base-devel：sudo pacman -S --need
 
 # ---- 1. 依赖 ---------------------------------------------------------------
 say "检查/安装构建依赖"
+
+# 这里【只放编译时真正需要的包】。
+#
+# ⚠️ ckbcomp 【故意不在这个列表里】——
+#   它是 calamares 包的运行时依赖（安装器键盘页预览键盘布局用），
+#   只写在 PKGBUILD 的 depends= 里，makepkg 编译时【根本不会检查它】。
+#   但它自己【不在 Arch 官方仓库】，只有 AUR 有，于是
+#     pacman -S ckbcomp -> error: target not found -> 整个构建挂掉。
+#   （这个坑栽过两次：workflow 的依赖列表一次，这里一次。）
+#
+#   ckbcomp 由 build/prebuild-aur.sh 从 AUR 编好，
+#   连同 calamares 一起进 [build] 源，装机时 pacman 才去解析它。
 DEPS=(base-devel cmake ninja extra-cmake-modules libglvnd
       qt6-base qt6-declarative qt6-svg qt6-tools qt6-translations
-      kcoreaddons kpmcore yaml-cpp libpwquality hwinfo parted ckbcomp)
+      kcoreaddons kpmcore yaml-cpp libpwquality hwinfo parted)
+
+# 先确认这些包在仓库里【真的存在】。
+# 不然 pacman -S 会只吐一句干巴巴的 "target not found"，
+# 完全看不出是自己列表写错了还是仓库同步出了问题。
+AVAIL="$(pacman -Slq 2>/dev/null | sort -u || true)"
+if [[ -n "$AVAIL" ]]; then
+  GONE=()
+  for p in "${DEPS[@]}"; do
+    grep -qxF -- "$p" <<<"$AVAIL" || GONE+=("$p")
+  done
+  if [[ ${#GONE[@]} -gt 0 ]]; then
+    die "这些【构建依赖】在仓库里不存在: ${GONE[*]}
+  先确认 pacman 数据库同步过（sudo pacman -Sy）。
+  如果某个包其实是【运行时依赖】（典型例子: ckbcomp），
+  那它就不该出现在这个列表里 —— 运行时依赖由 prebuild-aur.sh
+  从 AUR 编好后放进 [build] 源，装机时 pacman 才解析。"
+  fi
+  say "  构建依赖全部存在于仓库 ✓"
+fi
+
 MISSING=()
 for p in "${DEPS[@]}"; do pacman -Qq "$p" &>/dev/null || MISSING+=("$p"); done
 if [[ ${#MISSING[@]} -gt 0 ]]; then

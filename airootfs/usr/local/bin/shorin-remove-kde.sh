@@ -66,16 +66,31 @@ systemctl daemon-reload
 #   - 可以避免连带删掉 niri/dms 需要的共享依赖（Qt6/XDG/Polkit 等）；
 #   - 任一包不存在时 pacman -Rns 会整条报错，脚本会跳过继续。
 # 因此这里对每个包先 --print 预览，确认存在再删。
-KDE_PKGS=(
-  plasma-meta plasma-desktop plasma-workspace plasma-pa plasma-nm
-  plasma-systemmonitor plasma-nano plasma-wayland
-  sddm sddm-greeter sddm-kcm
-  dolphin konsole kate ksystemsettings kded5 kded6
-  kio-extras plasma-workspace-common libkscreen locker
-  breeze breeze-icons oxygen-icons
-  xdg-desktop-portal-kde plasma-discover
-  breeze-icon-theme kde-style-breeze
-)
+  # ⚠️ 这里写的是【当前仓库里真实存在】的包名。
+  #    Plasma 6 期间改过一批名字，旧写法现在已经查不到了：
+  #      ksystemsettings        -> systemsettings
+  #      kded6                  -> kded
+  #      plasma-discover        -> discover
+  #      locker                 -> kscreenlocker
+  #      plasma-wayland         -> plasma-workspace
+  #      plasma-workspace-common-> plasma-workspace
+  #      breeze-icon-theme      -> breeze-icons
+  #      kde-style-breeze       -> breeze
+  #      sddm-greeter           -> 根本不是包（greeter 主题在 sddm 里）
+  #    下面循环有 pacman -Qq 守卫，写错名字只会跳过、不会崩；
+  #    但写对了才真的删得掉 —— 之前那版 KDE 删不干净就是这个原因。
+  KDE_PKGS=(
+    plasma-meta plasma-desktop plasma-workspace plasma-pa plasma-nm
+    plasma-systemmonitor plasma-nano
+    sddm sddm-kcm
+    dolphin konsole kate
+    systemsettings kded kded5
+    kio-extras
+    kscreenlocker
+    discover
+    breeze breeze-icons breeze-cursors oxygen-icons
+    xdg-desktop-portal-kde
+  )
 
 log "删除 KDE 包（逐个删，避免误伤共享依赖）"
 removed=()
