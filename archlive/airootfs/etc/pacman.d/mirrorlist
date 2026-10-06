@@ -1,7 +1,0 @@
-## 国内镜像源 —— 2026-10-05 实测全部可达
-
-Server = https://mirrors.tuna.tsinghua.edu.cn/archlinux/$repo/os/$arch
-Server = https://mirrors.ustc.edu.cn/archlinux/$repo/os/$arch
-Server = https://mirrors.aliyun.com/archlinux/$repo/os/$arch
-Server = https://mirrors.huaweicloud.com/archlinux/$repo/os/$arch
-Server = https://mirrors.pku.edu.cn/archlinux/$repo/os/$arch

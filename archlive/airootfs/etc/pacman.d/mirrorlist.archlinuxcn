@@ -1,5 +1,0 @@
-## archlinuxcn
-
-Server = https://mirrors.tuna.tsinghua.edu.cn/archlinuxcn/$arch
-Server = https://mirror.iscas.ac.cn/archlinuxcn/$arch
-Server = https://mirrors.bfsu.edu.cn/archlinuxcn/$arch
