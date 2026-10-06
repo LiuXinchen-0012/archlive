@@ -18,6 +18,10 @@ FAIL=0
 
 ok()   { printf '  \033[32mok\033[0m      %s\n' "$*"; }
 warn() { printf '  \033[33mWARN\033[0m    %s\n' "$*"; FAIL=1; }
+# note = 提示性告警，【不】置 FAIL。
+# warn() 会让整个 preflight 返回非 0，CI 就此中断 —— 只有真正该拦下来的
+# 问题才用 warn/bad，纯信息性的（"这会导致什么后果"）用 note。
+note() { printf '  \033[33mWARN\033[0m    %s\n' "$*"; }
 bad()  { printf '  \033[31mFAIL\033[0m    %s\n' "$*"; FAIL=1; }
 head_() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 
@@ -553,8 +557,16 @@ if [[ $FAST -eq 0 ]]; then   # 依赖已编译产物，--fast 模式跳过
 head_ "9. 本地 [build] 仓库（自编译 Calamares）"
 BUILD_REPO="$PROFILE_DIR/airootfs/etc/pacman.d/build-repo"
 if [[ -d "$BUILD_REPO" ]]; then
-  if compgen -G "$BUILD_REPO/calamares-*.pkg.tar.zst" > /dev/null; then
-    ok "ISO 内含 calamares 包：$(basename "$(ls -1 "$BUILD_REPO"/calamares-*.pkg.tar.zst | head -1)")"
+  # ⚠️ 必须确认是【主包】calamares-<ver>-*.pkg.tar.zst，不是 calamares-debug-*。
+  #    只有 debug 包的话，ISO 里根本没有安装器，mkarchiso 会直接报
+  #    "target not found: calamares"。这个坑栽过一次。
+  if compgen -G "$BUILD_REPO/calamares-[0-9]*.pkg.tar.zst" > /dev/null; then
+    ok "ISO 内含 calamares 主包：$(basename "$(ls -1 "$BUILD_REPO"/calamares-[0-9]*.pkg.tar.zst | head -1)")"
+    compgen -G "$BUILD_REPO/calamares-debug-*.pkg.tar.zst" > /dev/null \
+      && ok "  （另有 debug 包，无害）"
+  elif compgen -G "$BUILD_REPO/calamares-debug-*.pkg.tar.zst" > /dev/null; then
+    bad "ISO 里只有 calamares-debug，没有主包 calamares —— 装出来的系统没有安装器！"
+    bad "  原因多半是 build-calamares.sh 用 ls -1t 挑产物时捡到了后生成的 debug 包"
   else
     warn "ISO 内 build-repo 目录里没有 calamares 包"
     warn "  跑 build/build-calamares.sh 生成（需普通用户 + sudo）"
@@ -622,8 +634,8 @@ done
 if [[ $GITHUB_FREE -eq 1 ]]; then
   ok "✅ 装机全程不需要代理 —— 官方包走国内源，其余都预置在 ISO 里了"
 else
-  warn "⚠ 装机时仍会访问 GitHub：$GITHUB_WHY"
-  warn "  没代理的话，这几项会拉不动。"
+  note "⚠ 装机时仍会访问 GitHub：$GITHUB_WHY"
+  note "  没代理的话，这几项会拉不动。"
 fi
 
 # ---------- 9c2. 换行符（CRLF 会让 CI 上每个脚本都炸）----------

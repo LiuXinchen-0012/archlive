@@ -105,13 +105,31 @@ fi
 
 [[ $rc -eq 0 ]] || { tail -40 "$MAKELOG"; die "编译失败，见上方输出"; }
 
-PKG="$(ls -1t "$BUILD_DIR"/calamares-*.pkg.tar.zst 2>/dev/null | head -1)"
+# ⚠️ makepkg 会同时产出 calamares 和 calamares-debug。
+#    `ls -1t`（按时间倒序）会【捡到 debug】—— 它后生成。
+#    结果只把 debug 拷进 [build] 源，ISO 里根本没有 calamares 这个包，
+#    mkarchiso 会直接报 "target not found: calamares"。栽过一次。
+PKG=""
+for cand in "$BUILD_DIR"/calamares-*.pkg.tar.zst; do
+  [[ -f "$cand" ]] || continue
+  case "$(basename "$cand")" in
+    *-debug-*) continue ;;
+  esac
+  PKG="$cand"; break
+done
+if [[ -z "$PKG" ]]; then
+  # 兜底：连 debug 都没有就随便挑一个，但要给出明确警告
+  PKG="$(ls -1t "$BUILD_DIR"/calamares-*.pkg.tar.zst 2>/dev/null | head -1)"
+  [[ -n "$PKG" ]] && warn "  只找到 $(basename "$PKG")，没有主包 calamares —— ISO 会装不上安装器"
+fi
 [[ -n "$PKG" ]] || die "没找到编译产物 .pkg.tar.zst"
+echo "  主包: $(basename "$PKG")"
 
 # ---- 3. 放进本地仓库 -------------------------------------------------------
 say "安装到本地仓库 $REPO_DIR"
 sudo mkdir -p "$REPO_DIR"
-sudo cp "$PKG" "$REPO_DIR"/
+  # 主包和 debug 包【都】要进仓库：漏了主包 ISO 里就没有 calamares
+  sudo cp "$BUILD_DIR"/calamares-*.pkg.tar.zst "$REPO_DIR"/
 sudo rm -f "$REPO_DIR/calamares-shorin.db.tar.gz" "$REPO_DIR/calamares-shorin.db"  # repo-add 不带 -f，先清旧的
 sudo repo-add "$REPO_DIR/calamares-shorin.db.tar.gz" "$REPO_DIR"/calamares-*.pkg.tar.zst
 
