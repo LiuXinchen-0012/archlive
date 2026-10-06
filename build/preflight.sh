@@ -39,7 +39,37 @@ fetch_repo_dbs() {
 fetch_repo_dbs
 
 # ---------- 1. 包名 ----------
+# ---------- 0. 重复的 profile 副本 ----------
+# 有一次在【仓库目录内部】解压了打包好的 tar.gz，于是多套了一层 archlive/，
+# 变成：
+#     <root>/build/prebuild-aur.sh            ← 新（有 --syncdeps）
+#     <root>/archlive/build/prebuild-aur.sh   ← 旧（没有）
+# git add -A 会把这份影子副本一起提交上去。后果：
+#   - 下面的递归扫描会抓到旧副本，报出一堆"看起来很莫名"的错
+#     （比如明明改了代码，检查器却说还是旧的）
+#   - 仓库白白胖一圈
+#判据很直接：profiledef.sh 是 profile 根目录的标志文件，出现 >1 个就说明套娃了。
+head_ "0. 检查是否存在重复的 profile 副本"
+mapfile -t PROFILEDIRS < <(find "$PROFILE_DIR" -name profiledef.sh -not -path '*/.git/*' 2>/dev/null | xargs -r -n1 dirname | sort)
+if [[ ${#PROFILEDIRS[@]} -gt 1 ]]; then
+  echo "  FAIL    发现 ${#PROFILEDIRS[@]} 份 profile（profiledef.sh 出现了 ${#PROFILEDIRS[@]} 次）:"
+  for d in "${PROFILEDIRS[@]}"; do
+    echo "            $d"
+  done
+  echo "  → 多半是在仓库目录【里面】解压过打包的 tar.gz，多套了一层"
+  echo "  → 删掉多余的那层，只保留最外层："
+  echo "       git rm -r --cached archlive && rm -rf archlive"
+  echo "  → 以后解压用 -C 指定到仓库的【上一层】："
+  echo "       tar -xzf archlive-profile.tar.gz -C ~/Desktop/archlive"
+  FAIL=1
+elif [[ ${#PROFILEDIRS[@]} -eq 0 ]]; then
+  echo "  FAIL    一份 profile 都没找到，路径不对？"; FAIL=1
+else
+  echo "  ok      只有一份 profile: ${PROFILEDIRS[0]}"
+fi
+
 if [[ $FAST -eq 0 ]]; then   # 依赖已编译产物，--fast 模式跳过
+
 head_ "1. 校验 packages.x86_64 中的包名"
 [[ -s "$TMP/core.db" ]] || bad "仓库数据库没下下来，1/1b/1c 的结论都不可信"
 
