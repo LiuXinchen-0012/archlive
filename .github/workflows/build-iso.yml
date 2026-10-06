@@ -47,6 +47,7 @@ jobs:
     #    pacman -S ckbcomp 会直接 target not found，整个 job 就挂在这一步。
     #    它由 prebuild-aur.sh 从 AUR 编译后放进 [build] 源，最终进 ISO。
     steps:
+
       - name: 取回 profile
         uses: actions/checkout@v4
         with:
@@ -55,9 +56,52 @@ jobs:
       - name: 容器内准备
         shell: bash
         run: |
+          # set -e 必须留着：关键命令一挂就立刻退出，EXIT trap 才能抓到现场。
+          # （曾经试过去掉它，结果 pacman 挂了脚本继续跑，最后一行成功 rc=0，dump 根本不触发。）
           set -euo pipefail
-          pacman-key --init
+
+          # ---- 挂了就把现场全 dump 出来 ----
+          # 之前两次都是「26 秒 / 52 秒秒挂」，日志里只有一句
+          # `target not found` 或者什么都没有，根本看不出是哪一环。
+          # 这次失败会直接把 pacman/镜像/磁盘/DNS/keyring 的状态打出来。
+          dump() {
+            rc=$?
+            if [ "$rc" -eq 0 ]; then return 0; fi
+            echo "::group::❌ 失败现场 (exit=$rc)"
+            echo "--- 失败的是哪一行 ---"
+            echo "BASH_COMMAND = ${BASH_COMMAND:-?}"
+            echo "--- pacman 版本 ---"
+            pacman -V 2>&1 | head -3 || echo "  pacman 都跑不起来"
+            echo "--- 实际生效的 mirrorlist（前5个）---"
+            grep -vE '^\s*(#|$)' /etc/pacman.d/mirrorlist 2>&1 | head -5
+            echo "--- 磁盘 ---"
+            df -h / /work 2>&1 | tail -3
+            echo "--- DNS 解析 ---"
+            getent hosts geo.mirror.pkgbuild.com || echo "  ❌ DNS 解析失败"
+            getent hosts mirror.rackspace.com  || echo "  ❌ 备用源也解析失败"
+            echo "--- HTTPS 连通性（10 秒超时）---"
+            curl -sSI --max-time 10 https://geo.mirror.pkgbuild.com/ 2>&1 | head -2 || echo "  ❌ 连不上"
+            echo "--- keyring 状态 ---"
+            pacman -Q archlinux-keyring 2>&1 || echo "  archlinux-keyring 没装"
+            ls -la /etc/pacman.d/gnupg/ 2>&1 | head -5
+            echo "--- 已装的关键包 ---"
+            pacman -Q archiso qt6-base sudo 2>&1 | head -5
+            echo "::endgroup::"
+            exit $rc
+          }
+          trap dump EXIT
+
+          echo "== 初始化 pacman keyring =="
+          # --init 偶发失败（熵不够/并发），重试一次
+          pacman-key --init || { echo "重试 pacman-key --init"; sleep 3; pacman-key --init; }
           pacman-key --populate archlinux
+
+          echo "== 先单独升级 keyring =="
+          # 老 keyring 会让后面的 -Syu 报 signature ... unknown trust
+          pacman -Sy --noconfirm --needed archlinux-keyring || true
+          pacman-key --populate archlinux || true
+
+          echo "== 安装构建依赖 =="
           pacman -Syu --noconfirm --needed \
             git curl wget sudo rsync \
             base-devel cmake ninja extra-cmake-modules libglvnd \
@@ -66,12 +110,29 @@ jobs:
             archiso squashfs-tools libisoburn dosfstools mtools \
             nodejs npm
 
-          # makepkg 拒绝以 root 运行，所以造一个普通用户
-          id builder && useradd -m -G wheel builder
+          echo "== 造 builder 用户 =="
+          # makepkg 拒绝以 root 运行。
+          #
+          # ⚠️ 这里【必须】用 || ，不能用 &&。
+          #    原写法是 `id builder && useradd -m -G wheel builder`：
+          #    builder 本来就不存在 -> id 失败 -> && 短路 -> useradd 压根没跑
+          #    -> set -e 也不拦（&& 列表里非末尾命令的失败不触发 set -e）
+          #    -> 脚本若无其事走到下一行的 chown 才炸，
+          #       错误信息写着 "chown: invalid user"，把人往错方向带。
+          #    实测就是栽在这：26 秒和 52 秒两次秒挂都是这一步。
+          #
+          # wheel 组在 archlinux:base 里不一定存在，缺就建。
+          # 不写 -g 10，让系统自己挑 GID（10 可能已经被别的组占了）。
+          getent group wheel >/dev/null 2>&1 || groupadd wheel
+          id builder  >/dev/null 2>&1 || useradd -m -G wheel builder
+          # 确认真的建出来了，不然又是"命令成功但结果不对"
+          id builder
           echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+          chmod 0440 /etc/sudoers.d/builder
           mkdir -p /work && chown -R builder:builder /work
+
           echo "::group::版本"
-          pacman -Q archiso qt6-base kcoreaddons | head
+          pacman -Q archiso qt6-base kcoreaddons sudo 2>&1 | head || true
           echo "::endgroup::"
 
       - name: 磁盘空间体检
