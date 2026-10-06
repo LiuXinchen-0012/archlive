@@ -32,11 +32,21 @@ jobs:
       image: archlinux:base
       options: --privileged
 
+    # ⚠️ 路径必须用 github.workspace 推导，【绝对不能硬编码 /work】。
+    #
+    #    在 container job 里，actions/checkout 把仓库放在 $GITHUB_WORKSPACE
+    #    （形如 /__w/<repo>/<repo>）下，再按 `path:` 追加一层，
+    #    也就是 /__w/<repo>/<repo>/archlive —— 而不是 /work/archlive。
+    #
+    #    为什么这个坑特别难查：checkout 本身【会成功】（它确实放了文件，
+    #    只是放到了别处），而紧接着那几步 pacman 命令根本不引用 PROFILE_DIR，
+    #    于是前面一路绿灯，直到第一个真正读 $PROFILE_DIR 的步骤才炸。
+    #    表现就是"随机地在某一步失败"，完全看不出跟路径有关。
     env:
-      PROFILE_DIR: /work/archlive
-      WORK_DIR: /work/w
-      OUT_DIR: /work/out
-      REPO: /work/archlive/build/repo
+      PROFILE_DIR: ${{ github.workspace }}/archlive
+      WORK_DIR: ${{ github.workspace }}/w
+      OUT_DIR: ${{ github.workspace }}/out
+      REPO: ${{ github.workspace }}/archlive/build/repo
       SHORIN_MODE: ${{ github.event.inputs.shorin_mode || 'full' }}
       PREBUILD_AUR: ${{ github.event.inputs.prebuild_aur || 'true' }}
       KEEP_AUR: ${{ github.event.inputs.keep_aur || 'true' }}
@@ -52,6 +62,26 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: archlive
+
+      # 这一步是专门为了【别再猜路径】加的：
+      # 路径猜错时，checkout 照样成功、后面几步照样绿灯，
+      # 直到很后面才炸，日志里根本没有"路径不对"这个线索。
+      # 这里直接把实际位置打出来，并且当场断言，5 秒内就知道对不对。
+      - name: 确认仓库位置
+        shell: bash
+        run: |
+          echo "GITHUB_WORKSPACE = ${GITHUB_WORKSPACE:-<未设置>}"
+          echo "PROFILE_DIR      = $PROFILE_DIR"
+          echo "--- 全盘找 profiledef.sh ---"
+          find / -name 'profiledef.sh' -not -path '/proc/*' 2>/dev/null | head -5
+          if [ ! -f "$PROFILE_DIR/profiledef.sh" ]; then
+            echo "::error::PROFILE_DIR 里没有 profiledef.sh —— 路径错了"
+            echo "::error::看上面 find 的结果，那才是 checkout 真正落地的位置"
+            exit 1
+          fi
+          echo "--- PROFILE_DIR 顶层内容 ---"
+          ls -la "$PROFILE_DIR"
+          echo "✓ 仓库位置正确"
 
       - name: 容器内准备
         shell: bash
@@ -75,7 +105,7 @@ jobs:
             echo "--- 实际生效的 mirrorlist（前5个）---"
             grep -vE '^\s*(#|$)' /etc/pacman.d/mirrorlist 2>&1 | head -5
             echo "--- 磁盘 ---"
-            df -h / /work 2>&1 | tail -3
+            df -h / "$GITHUB_WORKSPACE" 2>&1 | tail -3
             echo "--- DNS 解析 ---"
             getent hosts geo.mirror.pkgbuild.com || echo "  ❌ DNS 解析失败"
             getent hosts mirror.rackspace.com  || echo "  ❌ 备用源也解析失败"
@@ -129,7 +159,9 @@ jobs:
           id builder
           echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
           chmod 0440 /etc/sudoers.d/builder
-          mkdir -p /work && chown -R builder:builder /work
+          # makepkg 产出的包要写进 PROFILE_DIR/build/，
+          # 所以整个 workspace 都得交给 builder，不然后面步骤全是 permission denied
+          chown -R builder:builder "${GITHUB_WORKSPACE:-$PROFILE_DIR}"
 
           echo "::group::版本"
           pacman -Q archiso qt6-base kcoreaddons sudo 2>&1 | head || true
@@ -138,8 +170,8 @@ jobs:
       - name: 磁盘空间体检
         shell: bash
         run: |
-          df -h / /work 2>/dev/null || df -h /
-          avail=$(df -Pk /work | awk 'NR==2{print $4}')
+          df -h / "$GITHUB_WORKSPACE" 2>/dev/null || df -h /
+          avail=$(df -Pk "$GITHUB_WORKSPACE" | awk 'NR==2{print $4}')
           echo "可用: $((avail/1024/1024)) GB"
           if [ "$avail" -lt 10485760 ]; then
             echo "::warning::空间不足 10GB，构建可能失败。GitHub 标准 runner 磁盘有限。"
@@ -246,7 +278,7 @@ jobs:
         with:
           name: build-logs
           path: |
-            /work/w/
+            ${{ env.WORK_DIR }}/
             ${{ env.PROFILE_DIR }}/build/calamares-build/
           retention-days: 7
           if-no-files-found: ignore
