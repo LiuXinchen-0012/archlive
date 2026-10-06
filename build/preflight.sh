@@ -78,7 +78,7 @@ head_ "1. 校验 packages.x86_64 中的包名"
 [[ -s "$TMP/core.db" ]] || bad "仓库数据库没下下来，1/1b/1c 的结论都不可信"
 
 python3 - "$TMP" "$PROFILE_DIR/packages.x86_64" <<'PY'
-  import re, tarfile, sys, os
+import re, tarfile, sys, os
 tmp, pkglist = sys.argv[1], sys.argv[2]
 have = set()
 for db in ('core', 'extra', 'multilib'):
@@ -430,6 +430,48 @@ head_ "4. python 模块语法"
 while IFS= read -r p; do
   if python3 -m py_compile "$p" 2>/tmp/e; then ok "$(basename "$p")"; else bad "$(basename "$p"): $(cat /tmp/e)"; fi
 done < <(find "$PROFILE_DIR" -name '*.py')
+
+  # ---------- 4b. shell 里内嵌的 Python（heredoc）----------
+  # .py 文件有 py_compile 兜着，但【嵌在 shell heredoc 里的 Python】没人管。
+  # 栽过：给 import 那行多打了两个空格，bash 不报错（heredoc 内容是字面量），
+  # 只有真正执行到才炸，报的还是 IndentationError 这种看着像代码问题的信息。
+  # 判据：把每个 <<'PY'…PY' 块抽出来 compile() 一次，纯语法检查、不执行。
+  head_ "4b. 内嵌 Python（heredoc）语法"
+  if command -v python3 >/dev/null 2>&1; then
+    EMBED_BAD=$(python3 - "$PROFILE_DIR" <<'PYEMB' || true
+import os, re, sys
+root = sys.argv[1]
+bad = 0
+total = 0
+for dirpath, dirnames, filenames in os.walk(root):
+    dirnames[:] = [d for d in dirnames if d not in ('.git', 'node_modules')]
+    for fn in filenames:
+        if not fn.endswith('.sh'):
+            continue
+        p = os.path.join(dirpath, fn)
+        try:
+            txt = open(p, encoding='utf-8').read()
+        except Exception:
+            continue
+        for tag, code in re.findall(r"<<'(PY[0-9A-Za-z_]*)'\n(.*?)\n\1", txt, re.S):
+            total += 1
+            try:
+                compile(code, tag, "exec")
+            except SyntaxError as e:
+                bad += 1
+                print(f'  FAIL    {os.path.relpath(p, root)} 的 {tag} 块第 {e.lineno} 行: {e.msg}')
+if total == 0:
+    print('  ok      没有内嵌 Python 块')
+elif bad == 0:
+    print(f'  ok      {total} 个内嵌 Python 块语法都正确')
+sys.exit(1 if bad else 0)
+PYEMB
+)
+    [[ -n "$EMBED_BAD" ]] && echo "$EMBED_BAD"
+    if [[ -n "$EMBED_BAD" ]]; then FAIL=1; else ok "内嵌 Python 语法检查通过"; fi
+  else
+    warn "跳过（没有 python3）"
+  fi
 
 # ---------- 5. shell 脚本是否带可执行位 ----------
 head_ "5. 可执行位"
