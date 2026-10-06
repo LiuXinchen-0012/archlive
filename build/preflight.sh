@@ -823,6 +823,28 @@ fi
 
 # ---------- 10. Calamares 配置 ----------
 fi
+head_ "10a. profile 根目录的必需文件（archiso 的硬性要求）"
+# archiso 的 profile 根目录必须有 pacman.conf 和 build.sh。
+# 少了 pacman.conf，mkarchiso 拿着空路径去 realpath，
+# 报出来的是 realpath 传空参数那种错，跟"缺文件"八竿子打不着。
+# pacman.conf 由 build/gen-pacman-conf.sh 现场生成（含本机绝对路径，不进 git），
+# 所以只在【完整模式】下查它 —— 构建阶段才需要。
+if [[ $FAST -eq 0 ]]; then
+  MISS=()
+  [[ -f "$PROFILE_DIR/build.sh" ]]    || MISS+=("build.sh")
+  [[ -f "$PROFILE_DIR/pacman.conf" ]] || MISS+=("pacman.conf（由 build/gen-pacman-conf.sh 生成）")
+  if [[ ${#MISS[@]} -gt 0 ]]; then
+    bad "profile 根目录缺: ${MISS[*]}"
+    bad "  → mkarchiso 会报 realpath 收到空参数，完全看不出是缺文件"
+    bad "  → 修复: bash build/gen-pacman-conf.sh"
+    FAIL=1
+  else
+    ok "build.sh 与 pacman.conf 都在"
+  fi
+else
+  ok "（--fast 跳过，pacman.conf 构建时才生成）"
+fi
+
 head_ "10. Calamares 配置"
 CAL_DIR="$PROFILE_DIR/airootfs/etc/calamares"
 [[ -f "$CAL_DIR/settings.conf" ]] && ok "settings.conf 存在" || bad "缺少 settings.conf"

@@ -1,10 +1,18 @@
 # ── 影子副本 ──────────────────────────────────────────────
 # 打包的 tar.gz 里顶层目录叫 archlive/。如果解压到仓库目录【内部】，
-# 就会多套一层变成 archlive/archlive/，git add -A 会把它一起提交。
+# 就会多套一层变成 archlive/archlive/
+
+# profile 根目录的 pacman.conf 由 build/gen-pacman-conf.sh 现场生成
+# —— 里面是本机的绝对路径，换台机器就不能用了，所以不能进 git。
+/pacman.conf，git add -A 会把它一起提交。
 # 结果是仓库里躺着两份 profile，递归检查会抓到那份旧的，报出一堆假问题。
 # 解压请务必指定 -C 到仓库的上一层：
 #     tar -xzf archlive-profile.tar.gz -C ~/Desktop/archlive
 /archlive/
+
+# profile 根目录的 pacman.conf 由 build/gen-pacman-conf.sh 现场生成
+# —— 里面是本机的绝对路径，换台机器就不能用了，所以不能进 git。
+/pacman.conf
 
 # ── 构建产物 ──────────────────────────────────────────────
 build/repo/

@@ -223,6 +223,11 @@ jobs:
             echo "::warning::没找到本地仓库数据库，preflight 可能报 calamares 缺失"
           fi
 
+
+          # 顺手生成 profile 根目录的 pacman.conf（archiso 构建必需）。
+          # 放在这儿而不是「构建 ISO」那步，是因为第 11 步的自检会检查它存在 ——
+          # 生成得太晚的话，自检会先报「缺 pacman.conf」，白折腾一轮。
+          bash "$PROFILE_DIR/build/gen-pacman-conf.sh"
       - name: 编译 Calamares
         shell: bash
         run: |
@@ -258,6 +263,15 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf "$WORK_DIR"; mkdir -p "$WORK_DIR" "$OUT_DIR"
+
+          # ⚠️ 必须先生成 profile 根目录的 pacman.conf。
+          #    archiso 拿它往 work/x86_64/airootfs 里装包，
+          #    缺了它会拿着空路径去 realpath，报
+          #        realpath: '': No such file or directory
+          #    这种完全看不出所以然的错。（栽过）
+          #    里面的 [build] 源指向本机绝对路径，所以只能现场生成、不能进 git。
+          bash "$PROFILE_DIR/build/gen-pacman-conf.sh"
+
           mkarchiso -v -w "$WORK_DIR" -o "$OUT_DIR" "$PROFILE_DIR"
           ls -lh "$OUT_DIR"/*.iso
 
