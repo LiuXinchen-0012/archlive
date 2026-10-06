@@ -1,0 +1,25 @@
+[Unit]
+Description=Shorin — first-boot cleanup (remove KDE Plasma, switch to Niri)
+Documentation=https://github.com/SHORiN-KiWATA/shorin-dms-niri
+After=network-online.target
+Wants=network-online.target
+
+# 注意：这里【没有】Before=display-manager.service，也【没有】DefaultDependencies=no。
+# 理由见 /usr/local/bin/shorin-remove-kde.sh 顶部注释：
+# 在 sddm 正运行时删它的包，一旦失败就是砖机；而不这么做用户的可观测行为完全一样。
+#
+# 幂等保护：只要 /etc/shorin-remove-kde 还在就执行。脚本成功后会删掉该标记并
+# disable 本服务，所以第二次开机不会再跑。
+ConditionPathExists=/etc/shorin-remove-kde
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/shorin-remove-kde.sh
+# 删除几十个包 + grub-mkconfig，给足时间
+TimeoutStartSec=1800
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

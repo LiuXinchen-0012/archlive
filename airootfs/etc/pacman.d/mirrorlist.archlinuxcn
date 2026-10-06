@@ -1,0 +1,6 @@
+## archlinuxcn 专用源（路径结构不同）
+
+Server = https://mirrors.tuna.tsinghua.edu.cn/archlinuxcn/$arch
+Server = https://mirrors.ustc.edu.cn/archlinuxcn/$arch
+Server = https://mirrors.aliyun.com/archlinuxcn/$arch
+Server = https://mirrors.huaweicloud.com/archlinuxcn/$arch

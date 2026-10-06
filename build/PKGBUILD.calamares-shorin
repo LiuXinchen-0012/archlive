@@ -1,0 +1,109 @@
+# ============================================================================
+# PKGBUILD —— Calamares 3.4.2，针对 ARCH_SHORIN 打的补丁版
+#
+# 相对 AUR 官方 PKGBUILD 的三处改动（都是为了这个方案能跑）：
+#
+#   ① 解开 SKIP_MODULES 里的 packagechooser
+#      原方案 settings.conf 的 show 序列用了它，官方包把它编译掉了。
+#
+#   ② 解开 SKIP_MODULES 里的 initramfs
+#      原方案 settings.conf 的 exec 序列用了它，官方包同样编译掉了。
+#      （这个不能省：装完系统必须重建 initramfs，否则新内核起不来）
+#
+#   ③ 去掉 -DWITH_QT6 之外没有 WITH_PYTHONQT
+#      —— 因为我们【不再用 Python 自定义模块】。订阅输入框改由
+#         /usr/local/bin/launch-installer.sh 调 kdialog 弹窗完成，
+#         所以不需要 PythonQt，也就不需要 pybind11/pyqt5 的构建依赖。
+#         （Calamares 3.4.x 的 Python 接口硬编码只支持 job，不支持 view，
+#           ModuleFactory.cpp 里 type:view 只接受 interface:qtplugin）
+#
+# 另外移除了 plasmalnf —— 它是选 Plasma 主题的模块（见其 plasmalnf.conf），
+# 本项目装完就要把 Plasma 删掉换 Niri，选主题没有意义。
+#
+# 构建方式：以普通用户 + sudo 运行 makepkg（makepkg 拒绝 root）
+# ============================================================================
+
+pkgname=calamares
+pkgver=3.4.2
+pkgrel=9.shorin
+pkgdesc="Distribution-independent installer framework (ARCH_SHORIN patched)"
+arch=('x86_64')
+url="https://codeberg.org/Calamares/calamares"
+license=("GPL-3.0-or-later")
+provides=('calamares-framework')
+# 明确覆盖掉 AUR/其他源可能提供的同名包，保证 ISO 里用的是打过补丁的这份
+replaces=('calamares')
+
+depends=(
+  kcoreaddons
+  kpmcore
+  libpwquality
+  qt6-declarative
+  qt6-svg
+  yaml-cpp
+  hwinfo
+  parted
+  ckbcomp
+)
+
+makedepends=(
+  extra-cmake-modules
+  libglvnd
+  ninja
+  qt6-tools
+  qt6-translations
+  cmake
+  gcc
+)
+
+# 注意：源用官方 release tarball，带 sha256 校验，不走实时 git
+# （原方案第 7 节的风险对策之一：避免实时拉取被投毒的源码）
+source=("calamares-$pkgver.tar.gz::https://codeberg.org/Calamares/calamares/releases/download/v$pkgver/calamares-$pkgver.tar.gz")
+sha256sums=('733bbbb00dc9f84874bd5c22960952f317ea2537565431179fa2152b2fbfdccc')
+
+# ---- 改动 ①②：解开的模块 ----
+_skip_modules=(
+  dracut
+  dracutlukscfg
+  dummycpp
+  dummyprocess
+  dummypython
+  dummypythonqt
+  initramfscfg
+  packagechooserq
+  services-openrc
+  interactiveterminal
+)
+# packagechooser  —— 已解开
+# initramfs        —— 已解开
+# interactiveterminal —— 保持 skip（本方案用 kdialog 弹窗，不需要终端视图）
+
+build() {
+  cmake -B build -S "calamares-$pkgver" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_INSTALL_LIBDIR=lib \
+    -DWITH_QT6=ON \
+    -DINSTALL_CONFIG=ON \
+    -DSKIP_MODULES="${_skip_modules[*]}" \
+    -DBUILD_TESTING=OFF \
+    -DKDE_INSTALL_BINDIR=/usr/bin \
+    -DKDE_INSTALL_SBINDIR=/usr/sbin \
+    -DKDE_INSTALL_LIBDIR=/usr/lib \
+    -DKDE_INSTALL_LIBEXECDIR=/usr/libexec \
+    -DKDE_INSTALL_INCLUDEDIR=/usr/include \
+    -DKDE_INSTALL_LOCALSTATEDIR=/var \
+    -DKDE_INSTALL_SHAREDSTATEDIR=/usr/share \
+    -DKDE_INSTALL_DATAROOTDIR=/usr/share \
+    -DKDE_INSTALL_DATADIR=/usr/share \
+    -DKDE_INSTALL_LOCALEDIR=/usr/share/locale \
+    -DKDE_INSTALL_MANDIR=/usr/share/man \
+    -DKDE_INSTALL_INFODIR=/usr/share/info \
+    -DKDE_INSTALL_SYSCONFDIR=/etc \
+    -Wno-dev
+  cmake --build build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+}

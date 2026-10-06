@@ -1,0 +1,186 @@
+name: build-iso
+
+# 手动触发；也可以推 tag 自动触发
+on:
+  workflow_dispatch:
+    inputs:
+      shorin_mode:
+        description: 'SHORIN_MODE —— full(默认, 带 Shorin dotfiles) / skeleton(更轻, 只装官方 dms-shell)'
+        type: choice
+        options: [full, skeleton]
+        default: full
+      prebuild_aur:
+        description: '预编译 AUR 包（full 模式需要；CI 在美国，GitHub 直连）'
+        type: boolean
+        default: true
+      keep_aur:
+        description: '把 AUR 编译缓存作为 artifact 留下（下次构建快很多）'
+        type: boolean
+        default: true
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # 用官方 Arch 容器当环境 —— 你不需要自己有 Arch 机器
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base
+      options: --privileged
+
+    env:
+      PROFILE_DIR: /work/archlive
+      WORK_DIR: /work/w
+      OUT_DIR: /work/out
+      REPO: /work/archlive/build/repo
+      SHORIN_MODE: ${{ github.event.inputs.shorin_mode || 'full' }}
+      PREBUILD_AUR: ${{ github.event.inputs.prebuild_aur || 'true' }}
+      KEEP_AUR: ${{ github.event.inputs.keep_aur || 'true' }}
+
+    steps:
+      - name: 取回 profile
+        uses: actions/checkout@v4
+        with:
+          path: archlive
+
+      - name: 容器内准备
+        shell: bash
+        run: |
+          set -euo pipefail
+          pacman-key --init
+          pacman-key --populate archlinux
+          pacman -Syu --noconfirm --needed \
+            git curl wget sudo rsync \
+            base-devel cmake ninja extra-cmake-modules libglvnd \
+            qt6-base qt6-declarative qt6-svg qt6-tools qt6-translations \
+            kcoreaddons kpmcore yaml-cpp libpwquality hwinfo parted ckbcomp \
+            archiso squashfs-tools libisoburn dosfstools mtools \
+            nodejs npm
+
+          # makepkg 拒绝以 root 运行，所以造一个普通用户
+          id builder && useradd -m -G wheel builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+          mkdir -p /work && chown -R builder:builder /work
+          echo "::group::版本"
+          pacman -Q archiso qt6-base kcoreaddons | head
+          echo "::endgroup::"
+
+      - name: 磁盘空间体检
+        shell: bash
+        run: |
+          df -h / /work 2>/dev/null || df -h /
+          avail=$(df -Pk /work | awk 'NR==2{print $4}')
+          echo "可用: $((avail/1024/1024)) GB"
+          if [ "$avail" -lt 10485760 ]; then
+            echo "::warning::空间不足 10GB，构建可能失败。GitHub 标准 runner 磁盘有限。"
+          fi
+
+      - name: 选镜像源（CI 在美国，用官方源更快）
+        shell: bash
+        run: |
+          bash "$PROFILE_DIR/build/use-mirror.sh" official
+          head -8 "$PROFILE_DIR/airootfs/etc/pacman.d/mirrorlist"
+
+      - name: 编译 Calamares
+        shell: bash
+        run: |
+          sudo -u builder bash "$PROFILE_DIR/build/build-calamares.sh"
+        env:
+          MAKEFLAGS: '-j2'
+
+      - name: 预置 TPClash 二进制（装机时就不用连 GitHub 了）
+        shell: bash
+        run: |
+          sudo -u builder bash "$PROFILE_DIR/build/prefetch-binaries.sh" \
+            || echo "::warning::TPClash 没能预置，装机时会现下"
+
+      - name: 预编译 AUR 包
+        if: ${{ env.SHORIN_MODE == 'full' && env.PREBUILD_AUR == 'true' }}
+        shell: bash
+        run: |
+          sudo -u builder bash "$PROFILE_DIR/build/prebuild-aur.sh"
+        env:
+          MAKEFLAGS: '-j2'
+
+      - name: 把本地仓库挂进宿主 pacman.conf
+        shell: bash
+        run: |
+          db=$(ls -1 "$PROFILE_DIR"/airootfs/etc/pacman.d/build-repo/*.db.tar.gz 2>/dev/null | head -1)
+          if [ -n "$db" ]; then
+            echo "Include = $db" >> /etc/pacman.conf
+            pacman -Sy --noconfirm
+            echo "已接入: $db"
+          else
+            echo "::warning::没找到本地仓库数据库，preflight 可能报 calamares 缺失"
+          fi
+
+      - name: 自检
+        shell: bash
+        run: bash "$PROFILE_DIR/build/preflight.sh" "$PROFILE_DIR"
+
+      - name: 校验 Calamares 配置
+        shell: bash
+        run: |
+          cd "$PROFILE_DIR" && npm install js-yaml --silent --no-fund --no-audit
+          node build/check-calamares.js airootfs/etc/calamares
+
+      - name: 写构建模式
+        shell: bash
+        run: |
+          printf '%s\n' "$SHORIN_MODE" > "$PROFILE_DIR/airootfs/etc/shorin-build-mode"
+          chmod +x "$PROFILE_DIR"/airootfs/usr/local/bin/*.sh
+          echo "shorin-build-mode = $SHORIN_MODE"
+          cat "$PROFILE_DIR/airootfs/etc/shorin-build-mode"
+
+      - name: 构建 ISO
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$WORK_DIR"; mkdir -p "$WORK_DIR" "$OUT_DIR"
+          mkarchiso -v -w "$WORK_DIR" -o "$OUT_DIR" "$PROFILE_DIR"
+          ls -lh "$OUT_DIR"/*.iso
+
+      - name: 产物校验
+        shell: bash
+        run: |
+          iso=$(ls -1 "$OUT_DIR"/archlinux-shorin-*.iso | head -1)
+          echo "ISO: $iso"
+          du -h "$iso"
+          sha256sum "$iso" | tee "$OUT_DIR/sha256sum.txt"
+          echo "条目数: $(bsdtar -tf "$iso" | wc -l)"
+          isoinfo -d -i "$iso" 2>/dev/null | grep -i "volume id" || true
+
+      - name: 上传 ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: archlinux-shorin-iso
+          path: |
+            ${{ env.OUT_DIR }}/*.iso
+            ${{ env.OUT_DIR }}/sha256sum.txt
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: 上传 AUR 缓存（下次构建快很多）
+        if: ${{ env.KEEP_AUR == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: aur-cache
+          path: |
+            ${{ env.PROFILE_DIR }}/build/aur-pkgs/**/*.pkg.tar.zst
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: 上传完整日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            /work/w/
+            ${{ env.PROFILE_DIR }}/build/calamares-build/
+          retention-days: 7
+          if-no-files-found: ignore
