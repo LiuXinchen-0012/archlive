@@ -78,7 +78,7 @@ head_ "1. 校验 packages.x86_64 中的包名"
 [[ -s "$TMP/core.db" ]] || bad "仓库数据库没下下来，1/1b/1c 的结论都不可信"
 
 python3 - "$TMP" "$PROFILE_DIR/packages.x86_64" <<'PY'
-import tarfile, sys, os
+  import re, tarfile, sys, os
 tmp, pkglist = sys.argv[1], sys.argv[2]
 have = set()
 for db in ('core', 'extra', 'multilib'):
@@ -98,14 +98,26 @@ if not have:
     print('  FAIL    repo 数据库为空，无法校验'); sys.exit(2)
 
 # 额外扫描本地 [build] 仓库目录（自编译的 calamares 在那里）
-buildrepo = os.path.join(os.path.dirname(os.path.dirname(pkglist)),
-                         'airootfs', 'etc', 'pacman.d', 'build-repo')
+# ⚠️ 这里【只能往上一级】。packages.x86_64 就在 profile 根目录下，
+#    dirname 一次就是 profile 根。早先写成 dirname 两次，等于去找
+#    "$PROFILE_DIR/../airootfs/..." —— 那个目录压根不存在，
+#    于是 calamares 永远找不到，第 1 节一路 FAIL 到今天。
+#    跟那个 git ls-remote -h 是同一类错：判据自己坏了，输出却看着很合理。
+profile_root = os.path.dirname(os.path.abspath(pkglist))
+buildrepo = os.path.join(profile_root, 'airootfs', 'etc', 'pacman.d', 'build-repo')
 local = set()
 if os.path.isdir(buildrepo):
+    # 包名 = 文件名里"版本号之前"的那一段。
+    # 用 f.split('-')[0] 不行：calamares-debug-3.4.2-10-x86_64.pkg.tar.zst
+    # 会得到 calamares，跟主包混淆（ISO 里只剩 debug 包时反而判成"找到了"）。
     for f in os.listdir(buildrepo):
-        if f.endswith('.pkg.tar.zst'):
-            # calamares-3.4.2-9.shorin-x86_64.pkg.tar.zst -> calamares
-            local.add(f.split('-')[0])
+        if not f.endswith('.pkg.tar.zst'):
+            continue
+        m = re.match(r'^([a-z0-9][a-z0-9+._-]*?)-\d', f)
+        if m:
+            local.add(m.group(1))
+else:
+    print('  WARN    找不到本地 [build] 仓库目录: ' + buildrepo)
 
 seen, missing, dups, from_local = set(), [], [], []
 for raw in open(pkglist):
