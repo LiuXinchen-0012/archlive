@@ -202,18 +202,6 @@ jobs:
         shell: bash
         run: bash "$PROFILE_DIR/build/preflight.sh" --fast "$PROFILE_DIR"
 
-      - name: 编译 Calamares
-        shell: bash
-        run: |
-          sudo -u builder bash "$PROFILE_DIR/build/build-calamares.sh"
-        env:
-          MAKEFLAGS: '-j2'
-
-      - name: 预置 TPClash 二进制（装机时就不用连 GitHub 了）
-        shell: bash
-        run: |
-          sudo -u builder bash "$PROFILE_DIR/build/prefetch-binaries.sh" \
-            || echo "::warning::TPClash 没能预置，装机时会现下"
 
       - name: 预编译 AUR 包
         if: ${{ env.SHORIN_MODE == 'full' && env.PREBUILD_AUR == 'true' }}
@@ -234,6 +222,18 @@ jobs:
           else
             echo "::warning::没找到本地仓库数据库，preflight 可能报 calamares 缺失"
           fi
+
+      - name: 编译 Calamares
+        shell: bash
+        run: |
+          sudo -u builder bash "$PROFILE_DIR/build/build-calamares.sh"
+        env:
+          MAKEFLAGS: '-j2'
+      - name: 预置 TPClash 二进制（装机时就不用连 GitHub 了）
+        shell: bash
+        run: |
+          sudo -u builder bash "$PROFILE_DIR/build/prefetch-binaries.sh" \
+            || echo "::warning::TPClash 没能预置，装机时会现下"
 
       - name: 自检
         shell: bash

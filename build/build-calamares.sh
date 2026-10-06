@@ -74,7 +74,36 @@ mkdir -p "$BUILD_DIR"
 cp "$PROFILE_DIR/build/PKGBUILD.calamares-shorin" "$BUILD_DIR/PKGBUILD"
 
 say "makepkg（10~25 分钟，取决于 CPU）"
-( cd "$BUILD_DIR" && makepkg -f --noconfirm --clean ) || die "编译失败，见上方输出"
+MAKELOG="$BUILD_DIR/makepkg.log"
+set +e
+( cd "$BUILD_DIR" && makepkg -f --noconfirm --clean ) 2>&1 | tee "$MAKELOG"
+rc="${PIPESTATUS[0]}"
+set -e
+
+# ---- 兜底：依赖解析不过就降级重试一次 ----
+# makepkg 默认会检查【运行时依赖】。ckbcomp 这种只存在于 [build] 源的包，
+# 万一宿主 pacman.conf 没把本地仓库正确接进去，就会报：
+#     ==> Checking runtime dependencies...
+#     ==> Missing dependencies:
+#       -> ckbcomp
+#     ==> ERROR: Could not resolve all dependencies.
+#
+# 这类依赖在 ISO 构建阶段是能解析到的（那时 [build] 源已经和 calamares 一起
+# 在 build-repo 目录里），所以这里允许降级到 --nodeps 再试一次，
+# 而不是让整个 job 挂掉、白等 20 分钟。
+if [[ $rc -ne 0 ]] && grep -q "Could not resolve all dependencies" "$MAKELOG"; then
+  warn "运行时依赖在构建机上解析不了"
+  warn "  → 看上面 Missing dependencies 列了哪些包"
+  warn "  → 它们应该在 ISO 构建阶段由 [build] 源提供；用 --nodeps 重试"
+  warn "  → 若 ISO 构建时报找不到这些包，说明 prebuild-aur.sh 漏编了它们"
+  set +e
+  ( cd "$BUILD_DIR" && makepkg -f --noconfirm --clean --nodeps ) 2>&1 | tee "$MAKELOG"
+  rc="${PIPESTATUS[0]}"
+  set -e
+  [[ $rc -eq 0 ]] && warn "已用 --nodeps 编译成功（依赖将在 ISO 构建阶段解析）"
+fi
+
+[[ $rc -eq 0 ]] || { tail -40 "$MAKELOG"; die "编译失败，见上方输出"; }
 
 PKG="$(ls -1t "$BUILD_DIR"/calamares-*.pkg.tar.zst 2>/dev/null | head -1)"
 [[ -n "$PKG" ]] || die "没找到编译产物 .pkg.tar.zst"
