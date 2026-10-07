@@ -850,6 +850,31 @@ else
   ok "（--fast 跳过，pacman.conf 构建时才生成）"
 fi
 
+head_ "10b. profiledef.sh 的必备变量"
+# archiso 的 _read_profile() 里，只有 pacman_conf 没有默认值兜底：
+#     packages="$(realpath -- "${packages:-...}")"     ← 冒号给了默认值
+#     pacman_conf="$(realpath -- "${pacman_conf}")"     ← 【没有】
+# 所以 profiledef.sh 必须自己写 pacman_conf="..."，否则变量为空，
+# realpath -- "" 会报 "realpath: '': No such file or directory" ——
+# 一个字都没提"你少写了 pacman_conf"，极难定位。（栽过）
+PDF="$PROFILE_DIR/profiledef.sh"
+if [[ -f "$PDF" ]]; then
+  MUST=(pacman_conf)
+  MISS=()
+  for v in "${MUST[@]}"; do
+    grep -qE "^[[:space:]]*${v}=" "$PDF" || MISS+=("$v")
+  done
+  if [[ ${#MISS[@]} -gt 0 ]]; then
+    bad "profiledef.sh 没定义: ${MISS[*]}"
+    bad "  → mkarchiso 会报 realpath 收到空参数，完全看不出是这个原因"
+    bad "  → 修: 在 profiledef.sh 里加一行 ${MISS[0]}=\"pacman.conf\""
+    FAIL=1
+  else
+    ok "pacman_conf 已定义（$(grep -oE '^[[:space:]]*pacman_conf=.*' "$PDF" | head -1 | sed 's/^[[:space:]]*//')）"
+  fi
+else
+  warn "找不到 profiledef.sh"
+fi
 head_ "10. Calamares 配置"
 CAL_DIR="$PROFILE_DIR/airootfs/etc/calamares"
 [[ -f "$CAL_DIR/settings.conf" ]] && ok "settings.conf 存在" || bad "缺少 settings.conf"

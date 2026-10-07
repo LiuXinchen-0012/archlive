@@ -12,6 +12,18 @@ buildmodes=('iso')
 
 arch="x86_64"
 
+# ⚠️ pacman_conf 【必须】在这里定义，否则 mkarchiso 直接崩。
+#    archiso 的 _read_profile() 里是这么写的：
+#        packages="$(realpath -- "${packages:-${profile}/packages.${arch}}")"   ← 有兜底
+#        pacman_conf="$(realpath -- "${pacman_conf}")"                          ← 【没兜底】
+#    变量为空就变成 realpath -- ""，报出来的是
+#        realpath: '': No such file or directory
+#    ——跟"你少写了一行"八竿子打不着。（栽过）
+#
+#    写相对路径就行：_read_profile() 会先 cd 到 profile 目录再 source 本文件。
+#    官方 releng/profiledef.sh 第 12 行也是这么写的。
+pacman_conf="pacman.conf"
+
 # ---------------------------------------------------------------------------
 # bootmodes：与原方案不同。
 # 原方案写的是 'bios.syslinux' / 'uefi.systemd-boot.esp'，这是老版 archiso 的
