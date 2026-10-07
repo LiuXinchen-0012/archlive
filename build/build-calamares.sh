@@ -154,7 +154,7 @@ sudo cp "$PROFILE_DIR"/build/repo/calamares-*.pkg.tar.zst "$ISO_REPO"/ 2>/dev/nu
 #  ISO 里的仓库也要用 build.db.tar.gz，跟 [build] 段对得上
 if compgen -G "$PROFILE_DIR"/build/repo/build.db.tar.gz > /dev/null; then
   sudo cp "$PROFILE_DIR"/build/repo/build.db.tar.gz "$ISO_REPO"/
-  sudo ln -sf build.db.tar.gz    "$ISO_REPO/build.db"
+  sudo sh -c "gzip -dc $ISO_REPO/build.db.tar.gz > $ISO_REPO/build.db"
   sudo ln -sf build.files.tar.gz "$ISO_REPO/build.files"
   say "  已复制包与数据库到 $ISO_REPO"
 else
