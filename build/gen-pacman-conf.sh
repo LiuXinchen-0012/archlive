@@ -40,6 +40,18 @@ SigLevel         = Required DatabaseOptional
 LocalFileSigLevel = Optional
 CheckSpace
 
+# ⚠️ 别装文档/手册/许可证。
+#    我们这套 138 个包（KDE 全家桶 + LibreOffice + 双内核 + 内核头文件），
+#    光 doc/man/info/licenses 就要吃掉好几个 GB。
+#    GitHub 标准 runner 的 / 只有 25~30 GB，而构建期峰值需要：
+#        airootfs 14 GB + squashfs 6 GB + ISO 6.5 GB ≈ 27 GB
+#    去掉文档之后能省下 2~3 GB，正好从"卡在悬崖边"变成"稳稳的"。
+#    （官方 releng 是注释掉的，但官方 ISO 根本没装这么多包。）
+#
+#    ⚠️ 千万别顺手把 usr/share/locale 也加进来 ——
+#    我们要中文界面，砍了 locale 中文直接变方块。
+NoExtract = usr/share/doc/* usr/share/man/* usr/share/info/* usr/share/licenses/*
+
 [core]
 Include = /etc/pacman.d/mirrorlist
 

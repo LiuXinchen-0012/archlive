@@ -257,17 +257,31 @@ say "生成仓库数据库"
     #     顺手清掉历史遗留的各种 db，避免两个库并存。
     sudo rm -f "$REPO_DIR"/*.db "$REPO_DIR"/*.db.tar.gz "$REPO_DIR"/*.files.tar.gz
     sudo repo-add "$REPO_DIR/build.db.tar.gz" "$REPO_DIR"/*.pkg.tar.zst > /dev/null
-    #  ⚠️ 必须再补两个"无扩展名"的符号链接！
-    #     pacman 对 file:// 源用的 db 扩展名是 .db（不压缩），
-    #     它只会去开 <repo>/build.db，找不到就报：
-    #         error: failed retrieving file 'build.db' from disk :
-    #         Could not open file .../build-repo/build.db
-    #     repo-add 只生成 build.db.tar.gz，不生成 build.db。
-    #     libalpm 是用 libarchive 读库的，gzip 会被透明解压，
-    #     所以指向压缩库的软链完全可用（老版 repo-add 就是这么干的）。
-    sudo ln -sf build.db.tar.gz        "$REPO_DIR/build.db"
-    sudo ln -sf build.files.tar.gz     "$REPO_DIR/build.files"
-sudo cp "$REPO_DIR/build.db.tar.gz" "$ISO_REPO"/
+    #  ⚠️【关键】pacman 对 file:// 源只去开 $repo/build.db（不压缩），
+    #     repo-add 只生成 build.db.tar.gz，所以还得补一个【真正的未压缩文件】。
+    #     （之前试过用软链，libalpm 走 libarchive 理论上能解压，
+    #       但 CI 里还是挂了——软链这种活儿少用，直接解压成真文件最稳。）
+    #     两个仓库目录都要有：
+    #         $REPO_DIR  = build/repo                            （构建机用）
+    #         $ISO_REPO  = airootfs/etc/pacman.d/build-repo      （pacman 真正读这个）
+    for _d in "$REPO_DIR" "$ISO_REPO"; do
+      if [ -f "$_d/build.db.tar.gz" ]; then
+        sudo gzip -dc "$_d/build.db.tar.gz" > /tmp/_db.$$ && sudo mv /tmp/_db.$$ "$_d/build.db"
+      fi
+      if [ -f "$_d/build.files.tar.gz" ]; then
+        sudo gzip -dc "$_d/build.files.tar.gz" > /tmp/_fl.$$ && sudo mv /tmp/_fl.$$ "$_d/build.files"
+      fi
+      rm -f /tmp/_db.$$ /tmp/_fl.$$
+    done
+    [[ -f "$REPO_DIR/build.files.tar.gz" ]] && \
+  sudo cp "$REPO_DIR/build.db.tar.gz" "$ISO_REPO"/
+  [[ -f "$REPO_DIR/build.files.tar.gz" ]] && sudo cp "$REPO_DIR/build.files.tar.gz" "$ISO_REPO"/ || true
+  #  ⚠️【必须】在 ISO 仓库里也建一遍软链！
+  #     pacman.conf 的 [build] 段指向的是 $ISO_REPO，不是 $REPO_DIR。
+  #     只在 $REPO_DIR 建软链的话，pacman 照样报：
+  #         error: failed retrieving file 'build.db' from disk
+  #     ——两处都得有。（栽过一次：建是建了，建错地方了）
+  [[ -f "$ISO_REPO/build.files.tar.gz" ]] && \
 
 echo
 echo "  仓库内容："

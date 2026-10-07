@@ -1034,8 +1034,15 @@ for CFG in "$PROFILE_DIR/pacman.conf"; do
       # 关键：pacman 对 file:// 源用的 db 扩展名是 .db（不压缩），
       # 它只会去开 <repo>/build.db —— 光有 build.db.tar.gz 是不够的。
       # libalpm 用 libarchive 读库，gzip 会透明解压，所以软链完全可用。
-      if [ -e "$SRV/$s.db" ]; then
-        ok "仓库段 [$s] 有 $s.db（=$(readlink "$SRV/$s.db" 2>/dev/null || echo '真实文件')）"
+      if [ -s "$SRV/$s.db" ]; then
+        ok "仓库段 [$s] 有 $s.db（$(wc -c < "$SRV/$s.db" | tr -d ' ') 字节）"
+      elif [ -s "$SRV/$s.db.tar.gz" ]; then
+        bad "仓库段 [$s] 只有 $s.db.tar.gz，没有未压缩的 $s.db"
+        bad "  → pacman 对 file:// 源只找 \$repo/$s.db，会报"
+        bad "    failed retrieving file '$s.db' from disk"
+        bad "  → 补: gzip -dc $s.db.tar.gz > $s.db"
+        bad "    （软链也理论上可行，但 CI 上验过不稳，别用）"
+        BADDB=1
       elif compgen -G "$SRV/$s.db.tar.gz" >/dev/null; then
         bad "仓库段 [$s] 只有 $s.db.tar.gz，没有 $s.db"
         bad "  → pacman 对 file:// 源只找 \$repo/$s.db，会报"
@@ -1053,6 +1060,79 @@ for CFG in "$PROFILE_DIR/pacman.conf"; do
 done
 if [ $BADDB -eq 0 ] && [ ! -f "$PROFILE_DIR/pacman.conf" ]; then
   note "还没有 pacman.conf（构建时由 gen-pacman-conf.sh 生成），跳过"
+fi
+head_ "10g. airootfs 的 pacman.conf 能不能被 pacman 解析"
+# 装机后的 pacman.conf 也要过 pacman 这一关 —— mkarchiso 最后一步
+# 「生成已装包列表」会调 pacman 读它，解析不了就在 4000 多行 INFO 之后
+# 突然来一句 error，看着像跑了很久才挂，其实错在第一行配置。
+#
+# 栽过两次：
+#   1. [options] 里漏了 Architecture = auto
+#      → error: mirror '.../$repo/os/$arch' contains the '$arch' variable,
+#        but no 'Architecture' is defined.
+#   2. 留着 pacman 6 时代的老指令
+#      → warning: directive 'DisableDownloadTimeout' in section 'options' not recognized
+#      → warning: directive 'CheckNews' in section 'options' not recognized
+AI_CONF="$PROFILE_DIR/airootfs/etc/pacman.conf"
+if [[ -f "$AI_CONF" ]]; then
+  # 1) Architecture 必须有
+  if grep -qE '^[[:space:]]*Architecture[[:space:]]*=' "$AI_CONF"; then
+    ok "[options] 有 Architecture = $(grep -oE '^[[:space:]]*Architecture[[:space:]]*=.*' "$AI_CONF" | head -1 | sed 's/^[[:space:]]*//')"
+  else
+    bad "[options] 里没有 Architecture"
+    bad "  → mirrorlist 用 \$arch 展开架构，没这行 pacman 直接报："
+    bad "    mirror '.../\$repo/os/\$arch' contains the '\$arch' variable,"
+    bad "    but no 'Architecture' is defined."
+    bad "  → 修: [options] 下加一行 Architecture = auto"
+    FAIL=1
+  fi
+  # 2) 已从 pacman 移除的老指令
+  OLDOPT=$(grep -nE '^[[:space:]]*(DisableDownloadTimeout|CheckNews|UseSyslog|Cachemembers)[[:space:]]*=' "$AI_CONF" 2>/dev/null | cut -d: -f2- | sed 's/^[[:space:]]*//')
+  if [[ -n "$OLDOPT" ]]; then
+    bad "pacman.conf 里有已被移除的老指令:"
+    printf '          %s\n' "$OLDOPT" | sed 's/^/    /'
+    bad "  → pacman 会刷 'directive ... not recognized' 警告"
+    bad "  → DisableDownloadTimeout 用 Timeout 代替；CheckNews 已被 news 系统取代"
+    FAIL=1
+  else
+    ok "没有已被移除的老指令"
+  fi
+  # 3) Include 指向的文件必须存在
+  # 用 sed 抽值。原来那套 ${var#Include} 的写法在
+  # 「Include = /path」这种带空格等号的形式上会抽出 "="，等于没检查。
+  while IFS= read -r p; do
+    [[ -z "$p" ]] && continue
+    [[ "$p" == /* ]] || continue
+    # 这些路径是【ISO 内部】的绝对路径，在构建机上当然不存在，
+    # 得挂到 airootfs 根底下才找得到。别自己吓自己。
+    target=""
+    if [[ -f "$p" ]]; then
+      target="$p"
+    elif [[ -f "$PROFILE_DIR/airootfs$p" ]]; then
+      target="$PROFILE_DIR/airootfs$p"
+    fi
+    if [[ -z "$target" ]]; then
+      bad "pacman.conf 里 Include = $p 不存在"
+      bad "  → 宿主上也没有，airootfs 下也没有"
+      bad "  → pacman 会直接 error parsing，整份配置作废（连累所有仓库）"
+      bad "  → 该文件应该放在 airootfs$p"
+      FAIL=1
+    fi
+  done < <(grep -E '^[[:space:]]*Include[[:space:]]*=' "$AI_CONF" \
+           | sed -E 's/^[[:space:]]*[Ii]nclude[[:space:]]*=[[:space:]]*//; s/[[:space:]]+#.*$//; s/[[:space:]]+$//')
+  # 4) 本机能跑 pacman 的话，直接让它解析一遍（最权威）
+  if command -v pacman >/dev/null 2>&1; then
+    if pacman-conf --config "$AI_CONF" >/dev/null 2>/tmp/pc.err; then
+      ok "pacman-conf 能正常解析这份配置"
+    else
+      bad "pacman-conf 解析失败:"
+      sed 's/^/          /' /tmp/pc.err | head -5
+      FAIL=1
+    fi
+    rm -f /tmp/pc.err
+  fi
+else
+  warn "找不到 airootfs/etc/pacman.conf"
 fi
 head_ "10. Calamares 配置"
 CAL_DIR="$PROFILE_DIR/airootfs/etc/calamares"

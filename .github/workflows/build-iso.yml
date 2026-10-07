@@ -242,7 +242,33 @@ jobs:
           #
           # 所以这里【不用 heredoc】，用 printf，全部保持缩进。
           REPO_DIR="$PROFILE_DIR/airootfs/etc/pacman.d/build-repo"
-          gzip -dc "$REPO_DIR/build.db.tar.gz" > "$REPO_DIR/build.db"
+
+          # ---- 先自愈，再叫 pacman ----
+          # pacman 对 file:// 源的 db 扩展名是 .db（不压缩），它只去开
+          # <repo>/build.db；repo-add 只生成 build.db.tar.gz。
+          # 之前试过软链，CI 里还是挂；这回直接解压成真文件，最不容易出问题。
+          # 缺什么补什么，补不上立刻失败并把目录内容打出来，
+          # 别让 pacman 吐一句谁也看不懂的错。
+          echo "::group::本地仓库现状（自愈前）"
+          ls -la "$REPO_DIR" 2>&1 | sed 's/^/  /'
+          echo "::endgroup::"
+
+          if [ -f "$REPO_DIR/build.db.tar.gz" ]; then
+            gzip -dc "$REPO_DIR/build.db.tar.gz" > /tmp/_db && mv /tmp/_db "$REPO_DIR/build.db"
+            if [ -f "$REPO_DIR/build.files.tar.gz" ]; then
+              gzip -dc "$REPO_DIR/build.files.tar.gz" > /tmp/_fl && mv /tmp/_fl "$REPO_DIR/build.files"
+            fi
+            echo "  已由 build.db.tar.gz 生成未压缩的 build.db"
+          fi
+
+          if [ ! -s "$REPO_DIR/build.db" ]; then
+            echo "::error::本地仓库缺 build.db（或它是空的），$REPO_DIR 现状："
+            ls -la "$REPO_DIR" 2>&1 | sed 's/^/  /'
+            echo "::error::说明 build/prebuild-aur.sh 或 build/build-calamares.sh 的 repo-add 那段没跑成功"
+            echo "::error::需要 build.db 或 build.db.tar.gz"
+            exit 1
+          fi
+
           if ls -1 "$REPO_DIR"/*.db.tar.gz >/dev/null 2>&1; then
             printf '\n[build]\nSigLevel = Optional TrustAll\nServer = file://%s\n' "$REPO_DIR" >> /etc/pacman.conf
             pacman -Sy --noconfirm
@@ -308,7 +334,28 @@ jobs:
           # 再确认一次引导目录还在（中间任何环节清理过都能补回来）
           bash "$PROFILE_DIR/build/gen-boot-dirs.sh"
 
-          mkarchiso -v -w "$WORK_DIR" -o "$OUT_DIR" "$PROFILE_DIR"
+          # ---- 先把没用的编译产物清掉，再报磁盘 ----
+          # Calamares 的编译目录动辄几个 GB（Qt 的 moc/uic 中间产物），
+          # ISO 构建根本用不到它，但白占着磁盘。
+          # 先把它的日志留一份（万一要查编译问题），再删。
+          mkdir -p "$OUT_DIR"
+          cp -f "$PROFILE_DIR"/build/calamares-build/*.log "$OUT_DIR/" 2>/dev/null || true
+          sudo rm -rf "$PROFILE_DIR/build/calamares-build" 2>/dev/null || true
+          sudo rm -rf "$PROFILE_DIR/build/aur-pkgs"/*/src 2>/dev/null || true
+
+          echo "::group::磁盘（构建 ISO 之前）"
+          df -h / "$GITHUB_WORKSPACE" 2>&1 | sed 's/^/  /'
+          avail=$(df -Pk "$WORK_DIR" | awk 'NR==2{print $4}')
+          echo "  $WORK_DIR 可用: $((avail/1024/1024)) GB"
+          if [ "$avail" -lt 20971520 ]; then
+            echo "::warning::可用空间不足 20 GB（构建期峰值约需 25 GB），可能撑爆"
+          fi
+          echo "::endgroup::"
+
+          # ⚠️ 必须 tee。mkarchiso 一挂，日志就靠这个文件说话 ——
+          #    GitHub 的日志下载 API 要 admin 权限，我们扒不到，
+          #    「上传完整日志」那步又是 always 跑的，失败也能捡回来。
+          mkarchiso -v -w "$WORK_DIR" -o "$OUT_DIR" "$PROFILE_DIR" 2>&1 | tee "$OUT_DIR/mkarchiso.log"
           ls -lh "$OUT_DIR"/*.iso
 
       - name: 产物校验
@@ -341,13 +388,29 @@ jobs:
           retention-days: 30
           if-no-files-found: ignore
 
+      # ⚠️ 原来这里是：
+      #     path: ${{ env.WORK_DIR }}/
+      #           ${{ env.PROFILE_DIR }}/build/calamares-build/
+      #     也就是【整个工作目录 + 整个 Calamares 编译目录】= 870,908 个文件、几 GB。
+      #     后果有三：
+      #       1. 慢到离谱，白烧 GitHub Actions 的免费额度
+      #       2. 必然失败 —— airootfs 里有这种带冒号的文件名：
+      #            usr/share/ModemManager/fcc-unlock.available.d/03f0:4e1d
+      #          artifact 的路径不允许 ':' ，于是报
+      #            The path for one of the files in artifact is not valid
+      #       3. 最要命 —— 它是 always 跑的，一挂就把真正的错误盖住了，
+      #          每次都得先在 87 万个文件里绕一圈才能看到 mkarchiso 到底报了什么
+      # 现在只传日志文件，别的一概不传。
       - name: 上传完整日志
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-logs
           path: |
-            ${{ env.WORK_DIR }}/
-            ${{ env.PROFILE_DIR }}/build/calamares-build/
-          retention-days: 7
+            ${{ env.OUT_DIR }}/mkarchiso.log
+            ${{ env.WORK_DIR }}/x86_64/*.log
+            ${{ env.PROFILE_DIR }}/build/*.log
+            ${{ env.PROFILE_DIR }}/build/calamares-build/*.log
+            ${{ env.PROFILE_DIR }}/build/calamares-build/package/*.log
+          retention-days: 14
           if-no-files-found: ignore

@@ -139,9 +139,20 @@ sudo mkdir -p "$REPO_DIR"
 #     段名和库名对不上，就是这么个事。
 sudo rm -f "$REPO_DIR/build.db.tar.gz" "$REPO_DIR/build.db"   # repo-add 不带 -f，先清旧的
 sudo repo-add "$REPO_DIR/build.db.tar.gz" "$REPO_DIR"/*.pkg.tar.zst
+  #  ⚠️【关键】pacman 对 file:// 源只去开 $repo/build.db（不压缩），
+  #     而 repo-add 只生成 build.db.tar.gz，所以还得补一个【真正的未压缩文件】。
+  #     （之前试过软链，libalpm 走 libarchive 理论上能解压，但 CI 里还是挂了。
+  #       这种活儿少用花招，直接解压成真文件最稳。）
+  #     这里只处理构建机仓库；ISO 仓库等第 4 节拷过去之后再补 ——
+  #     因为 $ISO_REPO 到那时候才定义，set -u 下提前用会直接报错。
+  if [ -f "$REPO_DIR/build.db.tar.gz" ]; then
+    sudo gzip -dc "$REPO_DIR/build.db.tar.gz" > /tmp/_db.$$ && sudo mv /tmp/_db.$$ "$REPO_DIR/build.db"
+  fi
+  if [ -f "$REPO_DIR/build.files.tar.gz" ]; then
+    sudo gzip -dc "$REPO_DIR/build.files.tar.gz" > /tmp/_fl.$$ && sudo mv /tmp/_fl.$$ "$REPO_DIR/build.files"
+  fi
+  rm -f /tmp/_db.$$ /tmp/_fl.$$
 #  同样要补 .db / .files 软链：pacman 对 file:// 源只找 <repo>/build.db（见 prebuild-aur.sh 里的说明）
-sudo ln -sf build.db.tar.gz    "$REPO_DIR/build.db"
-sudo ln -sf build.files.tar.gz "$REPO_DIR/build.files"
 
 # ---- 4. 放置到 ISO 内可见的位置 --------------------------------------------
 # 两种方式，二选一（见 README）：
@@ -153,9 +164,14 @@ sudo mkdir -p "$ISO_REPO"
 sudo cp "$PROFILE_DIR"/build/repo/calamares-*.pkg.tar.zst "$ISO_REPO"/ 2>/dev/null || true
 #  ISO 里的仓库也要用 build.db.tar.gz，跟 [build] 段对得上
 if compgen -G "$PROFILE_DIR"/build/repo/build.db.tar.gz > /dev/null; then
-  sudo cp "$PROFILE_DIR"/build/repo/build.db.tar.gz "$ISO_REPO"/
-  sudo sh -c "gzip -dc $ISO_REPO/build.db.tar.gz > $ISO_REPO/build.db"
-  sudo ln -sf build.files.tar.gz "$ISO_REPO/build.files"
+    sudo cp "$PROFILE_DIR"/build/repo/build.db.tar.gz "$ISO_REPO"/
+    [[ -f "$PROFILE_DIR"/build/repo/build.files.tar.gz ]] && sudo cp "$PROFILE_DIR"/build/repo/build.files.tar.gz "$ISO_REPO"/ || true
+    #  ISO 仓库才是 pacman 真正读的那个，必须也有未压缩的 build.db
+    sudo gzip -dc "$ISO_REPO/build.db.tar.gz" > /tmp/_db.$$ && sudo mv /tmp/_db.$$ "$ISO_REPO/build.db"
+    if [ -f "$ISO_REPO/build.files.tar.gz" ]; then
+      sudo gzip -dc "$ISO_REPO/build.files.tar.gz" > /tmp/_fl.$$ && sudo mv /tmp/_fl.$$ "$ISO_REPO/build.files"
+    fi
+    rm -f /tmp/_db.$$ /tmp/_fl.$$
   say "  已复制包与数据库到 $ISO_REPO"
 else
   warn "  没找到 build.db.tar.gz，请在 $PROFILE_DIR/build/repo 下跑一次 repo-add"
