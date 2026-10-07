@@ -242,6 +242,7 @@ jobs:
           #
           # 所以这里【不用 heredoc】，用 printf，全部保持缩进。
           REPO_DIR="$PROFILE_DIR/airootfs/etc/pacman.d/build-repo"
+          gzip -dc "$REPO_DIR/build.db.tar.gz" > "$REPO_DIR/build.db"
           if ls -1 "$REPO_DIR"/*.db.tar.gz >/dev/null 2>&1; then
             printf '\n[build]\nSigLevel = Optional TrustAll\nServer = file://%s\n' "$REPO_DIR" >> /etc/pacman.conf
             pacman -Sy --noconfirm
