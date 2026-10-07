@@ -153,16 +153,27 @@ say "验证本地包可见"
 if repo-query --repo build 2>/dev/null | grep -q calamares; then
   echo "  ok  本地仓库里有 calamares"
 else
-  echo "  注意：当前 pacman.conf 里还没有启用 [build]（需要在构建机上加 Include）"
-  echo "       验证方法：临时加一行到 /etc/pacman.conf 的 Include 列表再跑 preflight"
+  echo "  注意：当前 pacman.conf 里还没有启用 [build]（需要在构建机上加 [build] 段）"
+  echo "       验证方法：临时在 /etc/pacman.conf 加一段 [build] + Server = file://… 再跑 preflight"
 fi
 
 say "完成"
 echo
 echo "下一步："
 echo "  1) 在【构建机】的 /etc/pacman.conf 里启用本地仓库，否则 preflight 查不到 calamares："
-echo "       echo 'Include = $REPO_DIR/calamares-shorin.db.tar.gz' | sudo tee -a /etc/pacman.conf"
-echo "       sudo pacman -Sy"
+#        注意：是 Server = file://... 【不是】Include = ...
+#        pacman.conf 里 Include 的意思是「把目标当配置片段读」，
+#        拿它去指向一个二进制 db 文件，pacman 会吐一屏乱码，
+#        然后整个 /etc/pacman.conf 解析失败。（栽过）
+cat <<TIPS
+       sudo tee -a /etc/pacman.conf >/dev/null <<'XEOF'
+
+[build]
+SigLevel = Optional TrustAll
+Server = file://$REPO_DIR
+XEOF
+       sudo pacman -Sy
+TIPS
 echo "  2) bash build/preflight.sh .    # 确认 calamares 能被解析"
 echo "  3) bash build/build.sh          # 构建 ISO"
 echo

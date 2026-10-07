@@ -215,11 +215,26 @@ jobs:
       - name: 把本地仓库挂进宿主 pacman.conf
         shell: bash
         run: |
-          db=$(ls -1 "$PROFILE_DIR"/airootfs/etc/pacman.d/build-repo/*.db.tar.gz 2>/dev/null | head -1)
-          if [ -n "$db" ]; then
-            echo "Include = $db" >> /etc/pacman.conf
+          # ⚠️ 这里的写法坑过我一次。原来是：
+          #     db=$(ls -1 .../build-repo/*.db.tar.gz | head -1)
+          #     echo "Include = $db" >> /etc/pacman.conf
+          # pacman.conf 里的 Include 是「把目标当【配置片段】读」，
+          # 不是「加一个软件源」。于是 pacman 去解析那个二进制 db 文件，
+          # 吐出来一屏乱码，然后整个 pacman.conf 解析失败：
+          #     warning: config file .../arch-shorin.db.tar.gz, line 1:
+          #     directive '...' in section 'options' not recognized.
+          #     error: no usable package repositories configured.
+          # 正确做法是老老实实写一个 repo 段落。
+          REPO_DIR="$PROFILE_DIR/airootfs/etc/pacman.d/build-repo"
+          if ls -1 "$REPO_DIR"/*.db.tar.gz >/dev/null 2>&1; then
+            cat >> /etc/pacman.conf <<EOF
+
+[build]
+SigLevel = Optional TrustAll
+Server = file://$REPO_DIR
+EOF
             pacman -Sy --noconfirm
-            echo "已接入: $db"
+            echo "已接入本地仓库: $REPO_DIR"
           else
             echo "::warning::没找到本地仓库数据库，preflight 可能报 calamares 缺失"
           fi

@@ -910,6 +910,46 @@ if [[ -f "$PROFILE_DIR/profiledef.sh" && -f "$PROFILE_DIR/packages.x86_64" ]]; t
 else
   warn "跳过（文件不全）"
 fi
+head_ "10d. pacman.conf 的 Include 语义（血泪）"
+# pacman.conf 里的 Include = <路径> 意思是「把目标当【配置片段】读」，
+# 不是「加一个软件源」。加本地仓库必须写：
+#     [build]
+#     Server = file:///绝对路径
+# 之前 workflow 里写成了 echo "Include = $db" >> /etc/pacman.conf，
+# pacman 就去解析那个二进制 db 文件，报一屏乱码然后整个配置解析失败：
+#     warning: config file .../arch-shorin.db.tar.gz, line 1:
+#     directive '...' in section 'options' not recognized.
+#     error: no usable package repositories configured.
+BADINC=0
+while IFS= read -r hit; do
+  [[ -z "$hit" ]] && continue
+  bad "$hit"
+  bad "  → Include 是「当配置读」的，不是「加软件源」"
+  bad "  → 修: 写 [build] + Server = file://<仓库绝对路径>"
+  BADINC=1
+done < <(grep -rn "Include[[:space:]]*=.*\.db\.tar" . --include="*.sh" --include="*.yml" 2>/dev/null \
+        | grep -v "^\./\.git/" \
+        | grep -vE "^[^:]+:[0-9]+:[[:space:]]*#" \
+        | sed "s|^\./||")
+[[ $BADINC -eq 0 ]] && ok "没有把仓库数据库当 Include 用"
+
+# 生成的 pacman.conf 里，Include 指向的文件必须真的存在
+if [[ -f "$PROFILE_DIR/pacman.conf" ]]; then
+  MISSML=()
+  while IFS= read -r m; do [[ -n "$m" ]] && MISSML+=("$m"); done < <(
+    grep -oE '^[[:space:]]*Include[[:space:]]*=[[:space:]]*/[^[:space:]]+' "$PROFILE_DIR/pacman.conf" \
+    | sed -E 's/.*=[[:space:]]*//' | while read -r f; do
+        [[ -f "$f" ]] || echo "$f"
+      done)
+  if [[ ${#MISSML[@]} -gt 0 ]]; then
+    bad "pacman.conf 里 Include 指向不存在的文件: ${MISSML[*]}"
+    bad "  → pacman 会直接中断整个配置解析（连累 [core]/[extra]），"
+    bad "    最后报 'no usable package repositories configured.'"
+    FAIL=1
+  else
+    ok "pacman.conf 里所有 Include 目标都存在"
+  fi
+fi
 head_ "10. Calamares 配置"
 CAL_DIR="$PROFILE_DIR/airootfs/etc/calamares"
 [[ -f "$CAL_DIR/settings.conf" ]] && ok "settings.conf 存在" || bad "缺少 settings.conf"
