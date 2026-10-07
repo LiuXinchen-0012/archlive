@@ -162,6 +162,34 @@ fi
 
 # ---- 4. 推送 ----
 step "推送"
+# ⚠️ 必须先 pull --rebase 再推。
+#    手机上用 GitHub 网页编辑器改过文件，本地没有那些提交，
+#    直接推就是：
+#        ! [rejected]  HEAD -> main (fetch first)
+#        error: failed to push some refs ...
+#    ——报错完全看不出"只是远端多了几次提交"，很容易让人以为代码写错了。
+#
+#    用 rebase 而不是 merge：我们的提交是"整包覆盖"性质的，
+#    merge 会在历史里留一个合并节点，下次手机上再改又容易冲突。
+#    rebase 把远端的提交垫在下面，我们这个包盖在最上面，历史干净。
+#
+#    --autostash：万一本地有没提交的改动（比如刚改完还没 commit），
+#    rebase 前先自动 stash，推完自动恢复。
+if ! git diff --quiet HEAD 2>/dev/null; then
+  echo "  提示：本地有未提交的改动，rebase 时会自动 stash 保护"
+fi
+
+if ! git pull --rebase --autostash origin HEAD 2>/tmp/_pr.$$; then
+  cat /tmp/_pr.$$ | sed 's/^/    /'
+  rm -f /tmp/_pr.$$
+  die "拉取远端更新失败。
+     多半是远端和本地改了同一个文件的同一处。
+     解法：git pull --rebase origin main，然后手动解冲突，
+           解完 git add <文件> && git rebase --continue"
+fi
+rm -f /tmp/_pr.$$
+ok "已同步远端更新"
+
 git push -u origin HEAD || die "推送失败。远端地址：$SCHEME/$OWNER/$REPO.git"
 ok "已推送"
 
