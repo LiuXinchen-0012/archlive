@@ -179,13 +179,27 @@ if ! git diff --quiet HEAD 2>/dev/null; then
   echo "  提示：本地有未提交的改动，rebase 时会自动 stash 保护"
 fi
 
-if ! git pull --rebase --autostash origin HEAD 2>/tmp/_pr.$$; then
+#    ⚠️⚠️ -X theirs 才是"用本地那份"！
+#        rebase 的时候 ours/theirs 的语义跟 merge 【正好相反】：
+#            -X ours   → 取【远端】那份
+#            -X theirs → 取【本地】这份
+#        我专门起了个临时仓库实测过（远端改一行、本地改同一行）：
+#            -X ours   → f = 远端那份
+#            -X theirs → f = 本地那份
+#        写反了不会报错，只会静悄悄地把你手机上改的东西覆盖掉 —— 更糟。
+#
+#        为什么该用本地这份：我们 push 的 tarball 是【整个 profile 的完整快照】，
+#        里面已经包含了手机上那些改动（Architecture、Timeout、去 CheckNews），
+#        所以本地版本才是最终正确版本，远端那份是旧的。
+if ! git pull --rebase -X theirs --autostash origin HEAD 2>/tmp/_pr.$$; then
   cat /tmp/_pr.$$ | sed 's/^/    /'
   rm -f /tmp/_pr.$$
   die "拉取远端更新失败。
-     多半是远端和本地改了同一个文件的同一处。
-     解法：git pull --rebase origin main，然后手动解冲突，
-           解完 git add <文件> && git rebase --continue"
+     解法（本地这份是完整快照，直接用它盖掉远端）：
+       git rebase --abort
+       git pull --rebase -X theirs origin main
+       git push -u origin HEAD
+     注意是 -X theirs，rebase 里 ours/theirs 跟 merge 相反。"
 fi
 rm -f /tmp/_pr.$$
 ok "已同步远端更新"

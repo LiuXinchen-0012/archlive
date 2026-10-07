@@ -1066,18 +1066,20 @@ head_ "10g. airootfs 的 pacman.conf 能不能被 pacman 解析"
 # 「生成已装包列表」会调 pacman 读它，解析不了就在 4000 多行 INFO 之后
 # 突然来一句 error，看着像跑了很久才挂，其实错在第一行配置。
 #
-# 栽过两次：
+# 栽过三次，一次比一次隐蔽：
 #   1. [options] 里漏了 Architecture = auto
 #      → error: mirror '.../$repo/os/$arch' contains the '$arch' variable,
 #        but no 'Architecture' is defined.
-#   2. 留着 pacman 6 时代的老指令
-#      → warning: directive 'DisableDownloadTimeout' in section 'options' not recognized
-#      → warning: directive 'CheckNews' in section 'options' not recognized
+#   2. Timeout —— 这个指令 pacman 压根【没有】，是我上一轮编出来的
+#   3. DisableDownloadTimeout = 5 —— 指令是有的，但【只能不带值】。
+#      pacman 的 _parse_options() 把指令分成"无值"和"有值"两个分支，
+#      两边认的名单不一样；它只在"无值"分支里，带上 =5 就掉进
+#      "有值"分支而那里没有它 → 同样报 not recognized。
+#      正确写法是光秃秃一行，后面别跟等号。
 AI_CONF="$PROFILE_DIR/airootfs/etc/pacman.conf"
 if [[ -f "$AI_CONF" ]]; then
-  # 1) Architecture 必须有
   if grep -qE '^[[:space:]]*Architecture[[:space:]]*=' "$AI_CONF"; then
-    ok "[options] 有 Architecture = $(grep -oE '^[[:space:]]*Architecture[[:space:]]*=.*' "$AI_CONF" | head -1 | sed 's/^[[:space:]]*//')"
+    ok "[options] 有 Architecture"
   else
     bad "[options] 里没有 Architecture"
     bad "  → mirrorlist 用 \$arch 展开架构，没这行 pacman 直接报："
@@ -1086,54 +1088,59 @@ if [[ -f "$AI_CONF" ]]; then
     bad "  → 修: [options] 下加一行 Architecture = auto"
     FAIL=1
   fi
-  # 2) 已从 pacman 移除的老指令
-  OLDOPT=$(grep -nE '^[[:space:]]*(DisableDownloadTimeout|CheckNews|UseSyslog|Cachemembers)[[:space:]]*=' "$AI_CONF" 2>/dev/null | cut -d: -f2- | sed 's/^[[:space:]]*//')
-  if [[ -n "$OLDOPT" ]]; then
-    bad "pacman.conf 里有已被移除的老指令:"
-    printf '          %s\n' "$OLDOPT" | sed 's/^/    /'
-    bad "  → pacman 会刷 'directive ... not recognized' 警告"
-    bad "  → DisableDownloadTimeout 用 Timeout 代替；CheckNews 已被 news 系统取代"
+
+  # pacman 不认的写法，两个坑
+  BADOPT=$(grep -E '^[[:space:]]*(Timeout|CheckNews|Cachemembers)[[:space:]]*=' "$AI_CONF" 2>/dev/null | sed 's/^[[:space:]]*//')
+  if grep -qE '^[[:space:]]*DisableDownloadTimeout[[:space:]]*=' "$AI_CONF" 2>/dev/null; then
+    BADOPT="${BADOPT}
+DisableDownloadTimeout  <-- 带了值，必须去掉等号"
+  fi
+  if [ -n "$BADOPT" ]; then
+    bad "pacman.conf 里有 pacman 不认的指令:"
+    printf '%s\n' "$BADOPT" | sed 's/^/          /'
+    bad "  → pacman 会刷 directive ... in section 'options' not recognized"
+    bad "  → Timeout / CheckNews 整个指令不存在；DisableDownloadTimeout 只能不带值"
     FAIL=1
   else
-    ok "没有已被移除的老指令"
+    ok "没有 pacman 不认的指令写法"
   fi
-  # 3) Include 指向的文件必须存在
-  # 用 sed 抽值。原来那套 ${var#Include} 的写法在
-  # 「Include = /path」这种带空格等号的形式上会抽出 "="，等于没检查。
-  while IFS= read -r p; do
-    [[ -z "$p" ]] && continue
-    [[ "$p" == /* ]] || continue
-    # 这些路径是【ISO 内部】的绝对路径，在构建机上当然不存在，
-    # 得挂到 airootfs 根底下才找得到。别自己吓自己。
-    target=""
-    if [[ -f "$p" ]]; then
-      target="$p"
-    elif [[ -f "$PROFILE_DIR/airootfs$p" ]]; then
-      target="$PROFILE_DIR/airootfs$p"
-    fi
-    if [[ -z "$target" ]]; then
-      bad "pacman.conf 里 Include = $p 不存在"
-      bad "  → 宿主上也没有，airootfs 下也没有"
-      bad "  → pacman 会直接 error parsing，整份配置作废（连累所有仓库）"
-      bad "  → 该文件应该放在 airootfs$p"
-      FAIL=1
-    fi
-  done < <(grep -E '^[[:space:]]*Include[[:space:]]*=' "$AI_CONF" \
-           | sed -E 's/^[[:space:]]*[Ii]nclude[[:space:]]*=[[:space:]]*//; s/[[:space:]]+#.*$//; s/[[:space:]]+$//')
-  # 4) 本机能跑 pacman 的话，直接让它解析一遍（最权威）
-  if command -v pacman >/dev/null 2>&1; then
-    if pacman-conf --config "$AI_CONF" >/dev/null 2>/tmp/pc.err; then
-      ok "pacman-conf 能正常解析这份配置"
+
+  # Include 指向的文件必须存在（在 ISO 里找，不是宿主）
+  for p in $(grep -E '^[[:space:]]*Include[[:space:]]*=' "$AI_CONF" \
+             | sed -E 's/^[[:space:]]*[Ii]nclude[[:space:]]*=[[:space:]]*//; s/[[:space:]]+#.*$//; s/[[:space:]]+$//'); do
+    case "$p" in /*) ;; *) continue ;; esac
+    if [ -f "$p" ] || [ -f "$PROFILE_DIR/airootfs$p" ]; then
+      ok "Include = $p 有对应文件"
     else
-      bad "pacman-conf 解析失败:"
-      sed 's/^/          /' /tmp/pc.err | head -5
+      bad "Include = $p 在宿主和 airootfs 下都不存在"
+      bad "  → 该文件应该放在 airootfs$p"
+      bad "  → pacman 会直接 error parsing，整份配置作废（连累所有仓库）"
       FAIL=1
     fi
+  done
+
+  # 本机能跑 pacman 的话让它真解析一遍。
+  # ⚠️ 只能拿 "not recognized" 当失败：这份配置里的 Include 全是 ISO 内部的
+  #    绝对路径（/etc/pacman.d/mirrorlist），在构建机上必然读不到，
+  #    pacman 报 "could not be read" 属于预期之内。
+  #    栽过一次：把它当失败 → 整轮构建被一个假警报卡死。
+  if command -v pacman-conf >/dev/null 2>&1; then
+    pacman-conf --config "$AI_CONF" >/dev/null 2>/tmp/pc.err || true
+    if grep -q "not recognized" /tmp/pc.err; then
+      bad "pacman-conf 认不出的指令:"
+      grep "not recognized" /tmp/pc.err | head -3 | sed 's/^/          /'
+      FAIL=1
+    else
+      ok "pacman-conf 没有报 not recognized"
+    fi
+    grep -q "could not be read" /tmp/pc.err && \
+      note "Include 的 /etc/pacman.d/* 在构建机上读不到是正常的（它们在 ISO 里）"
     rm -f /tmp/pc.err
   fi
 else
   warn "找不到 airootfs/etc/pacman.conf"
 fi
+
 head_ "10. Calamares 配置"
 CAL_DIR="$PROFILE_DIR/airootfs/etc/calamares"
 [[ -f "$CAL_DIR/settings.conf" ]] && ok "settings.conf 存在" || bad "缺少 settings.conf"
