@@ -875,6 +875,41 @@ if [[ -f "$PDF" ]]; then
 else
   warn "找不到 profiledef.sh"
 fi
+head_ "10c. bootmodes 合法性（照抄 archiso 91 的规则）"
+# archiso 的校验逻辑一共三条，每一条都能让构建直接中止：
+#   1. bios.syslinux.mbr / .eltorito / uefi-x64.* 等是【废弃写法】，
+#      archiso 会把它们自动删掉并替换，写了等于没写
+#   2. uefi.grub 和 uefi.systemd-boot 【互斥】，同时出现直接中止
+#   3. 用了 bios.syslinux，packages.x86_64 里必须有 syslinux 包
+# 这里把三条规则原样实现一遍，改坏了当场能看出来，不用等 CI。
+if [[ -f "$PROFILE_DIR/profiledef.sh" && -f "$PROFILE_DIR/packages.x86_64" ]]; then
+  BM=$(sed -nE "s/^[[:space:]]*'(bios|uefi)[a-z0-9.-]*'[[:space:]]*\$/\1/p" "$PROFILE_DIR/profiledef.sh" | tr -d "'")
+  BMALL=$(sed -n '/^[[:space:]]*bootmodes=(/,/)/p' "$PROFILE_DIR/profiledef.sh" | grep -oE "'[a-z0-9.-]+'" | tr -d "'" | tr '\n' ' ')
+  BMERR=0
+  for b in $BMALL; do
+    case "$b" in
+      bios.syslinux.mbr|bios.syslinux.eltorito|uefi-x64.*|uefi-ia32.*)
+        bad "bootmode '$b' 在 archiso 91 已废弃，会被自动替换掉（写了等于没写）"; BMERR=1 ;;
+    esac
+  done
+  if [[ " $BMALL " == *" uefi.grub "* && " $BMALL " == *" uefi.systemd-boot "* ]]; then
+    bad "uefi.grub 和 uefi.systemd-boot 互斥，archiso 会报 'cannot be used with' 然后中止"; BMERR=1
+  fi
+  if [[ " $BMALL " == *" bios.syslinux "* ]] && ! grep -q '^syslinux$' "$PROFILE_DIR/packages.x86_64"; then
+    bad "用了 bios.syslinux，但 packages.x86_64 里没有 syslinux 包（archiso 会中止）"; BMERR=1
+  fi
+  if [[ $BMERR -eq 0 ]]; then
+    ok "bootmodes: ${BMALL:-（空！）}"
+    [[ -z "$BMALL" ]] && { bad "一个启动模式都没有，做出来的 ISO 引导不了"; FAIL=1; }
+  fi
+  # grub 目录和 efiboot 目录跟着 bootmodes 走
+  [[ " $BMALL " == *" uefi.grub "* ]] && { [[ -d "$PROFILE_DIR/grub" ]] \
+    && ok "grub/ 配置目录在" || { note "grub/ 缺失（构建时由 gen-boot-dirs.sh 从 releng 拷入）"; }; }
+  [[ " $BMALL " == *" bios.syslinux "* ]] && { [[ -d "$PROFILE_DIR/syslinux" ]] \
+    && ok "syslinux/ 配置目录在" || { note "syslinux/ 缺失（构建时由 gen-boot-dirs.sh 从 releng 拷入）"; }; }
+else
+  warn "跳过（文件不全）"
+fi
 head_ "10. Calamares 配置"
 CAL_DIR="$PROFILE_DIR/airootfs/etc/calamares"
 [[ -f "$CAL_DIR/settings.conf" ]] && ok "settings.conf 存在" || bad "缺少 settings.conf"

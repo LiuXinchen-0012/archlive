@@ -63,6 +63,10 @@ linux-lts
 linux-lts-headers
 linux-firmware
 
+# archiso 的 bios.syslinux 引导模式【硬性】要求这个包，
+# 缺了会报 "The 'syslinux' package is missing from the package list!"
+syslinux
+
 ## —— 文件系统 / 引导 / 快照 ——
 btrfs-progs
 grub
