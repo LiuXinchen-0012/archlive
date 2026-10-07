@@ -248,12 +248,16 @@ done
 say "生成仓库数据库"
   # ⚠️ 不要加 -f。CI 里的 repo-add 报 "invalid option -- 'f'"，
   #    多半是 pacman 版本/实现差异。删掉旧库再生成，效果一样且不会有兼容问题。
-  sudo rm -f "$REPO_DIR/arch-shorin.db.tar.gz" "$REPO_DIR/arch-shorin.db"
-  sudo repo-add "$REPO_DIR/arch-shorin.db.tar.gz" "$REPO_DIR"/*.pkg.tar.zst > /dev/null
-sudo cp "$REPO_DIR/arch-shorin.db.tar.gz" "$ISO_REPO"/
-# 旧脚本可能生成过 calamares-shorin.db.tar.gz，两个都留着
-[[ -f "$REPO_DIR/calamares-shorin.db.tar.gz" ]] && \
-  sudo cp "$REPO_DIR/calamares-shorin.db.tar.gz" "$ISO_REPO"/ || true
+    #  ⚠️ 库名必须是 build.db.tar.gz —— pacman.conf 里写的是 [build] 段，
+    #     pacman 就只会去找 $repo/build.db（或 build.db.tar.gz）。
+    #     之前这里生成的是 arch-shorin.db.tar.gz，pacman 报：
+    #         error: failed retrieving file 'build.db' from disk :
+    #         Could not open file .../build-repo/build.db
+    #     段名和库名对不上，就是这么个事。（栽过）
+    #     顺手清掉历史遗留的各种 db，避免两个库并存。
+    sudo rm -f "$REPO_DIR"/*.db "$REPO_DIR"/*.db.tar.gz "$REPO_DIR"/*.files.tar.gz
+    sudo repo-add "$REPO_DIR/build.db.tar.gz" "$REPO_DIR"/*.pkg.tar.zst > /dev/null
+sudo cp "$REPO_DIR/build.db.tar.gz" "$ISO_REPO"/
 
 echo
 echo "  仓库内容："

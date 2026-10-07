@@ -1008,6 +1008,44 @@ else
   bad "  → 改用 printf '...\n...' 一行写完，保持缩进"
   FAIL=1
 fi
+head_ "10f. pacman 仓库的段名必须等于库名"
+# pacman.conf 里写 [build] Server = file:///path，pacman 就只会去找
+#     /path/build.db  （或 build.db.tar.gz）
+# 库要是叫别的名字（arch-shorin.db / calamares-shorin.db …），pacman 会报：
+#     error: failed retrieving file 'build.db' from disk :
+#     Could not open file .../build-repo/build.db
+#     error: no usable package repositories configured.
+# 很容易漏，因为 repo-add 传什么名它就生成什么名，不校验。
+# 这里检查：pacman.conf 里用了哪些 [xxx] 段，仓库目录里就得有对应的 xxx.db*。
+BADDB=0
+for CFG in "$PROFILE_DIR/pacman.conf"; do
+  [[ -f "$CFG" ]] || continue
+  while IFS= read -r srv; do
+    [[ -z "$srv" ]] && continue
+    SRV="${srv#Server[[:space:]]*=[[:space:]]*}"
+    SRV="${SRV#file://}"
+    [[ -d "$SRV" ]] || { bad "pacman.conf 的 Server 指向的目录不存在: $SRV"; BADDB=1; continue; }
+    # 取该段名
+    SEC=$(awk -v target="$SRV" '
+      /^\[/ { sec=$0; gsub(/[\[\]]/,"",sec) }
+      /^Server[[:space:]]*=/ { v=$0; sub(/.*=[[:space:]]*/,"",v); sub(/^file:\/\//,"",v)
+                             if (v==target) { print sec; exit } }' "$CFG")
+    for s in $SEC; do
+      if compgen -G "$SRV/$s.db" >/dev/null || compgen -G "$SRV/$s.db.tar.gz" >/dev/null; then
+        ok "仓库段 [$s] 有对应的 $s.db*"
+      else
+        bad "仓库段 [$s] 在 $SRV 下找不到 $s.db / $s.db.tar.gz"
+        bad "  → 目录里现有的库：$(ls -1 "$SRV"/*.db.tar.gz 2>/dev/null | xargs -n1 basename 2>/dev/null | tr '\n' ' ')"
+        bad "  → pacman 会报 failed retrieving file '$s.db' from disk"
+        bad "  → 修: repo-add \"\$REPO_DIR/$s.db.tar.gz\" …（库名必须等于段名）"
+        BADDB=1
+      fi
+    done
+  done < <(grep -E '^[[:space:]]*Server[[:space:]]*=[[:space:]]*file://' "$CFG" | sed -E 's/^[[:space:]]*//')
+done
+if [ $BADDB -eq 0 ] && [ ! -f "$PROFILE_DIR/pacman.conf" ]; then
+  note "还没有 pacman.conf（构建时由 gen-pacman-conf.sh 生成），跳过"
+fi
 head_ "10. Calamares 配置"
 CAL_DIR="$PROFILE_DIR/airootfs/etc/calamares"
 [[ -f "$CAL_DIR/settings.conf" ]] && ok "settings.conf 存在" || bad "缺少 settings.conf"

@@ -130,8 +130,15 @@ say "安装到本地仓库 $REPO_DIR"
 sudo mkdir -p "$REPO_DIR"
   # 主包和 debug 包【都】要进仓库：漏了主包 ISO 里就没有 calamares
   sudo cp "$BUILD_DIR"/calamares-*.pkg.tar.zst "$REPO_DIR"/
-sudo rm -f "$REPO_DIR/calamares-shorin.db.tar.gz" "$REPO_DIR/calamares-shorin.db"  # repo-add 不带 -f，先清旧的
-sudo repo-add "$REPO_DIR/calamares-shorin.db.tar.gz" "$REPO_DIR"/calamares-*.pkg.tar.zst
+#  ⚠️ 库名必须叫 build.db.tar.gz，不能随便起名！
+#     pacman.conf 里写的是 [build] 段，pacman 就只会去找 $repo/build.db
+#     （或 build.db.tar.gz）。之前这里生成的是 arch-shorin.db.tar.gz，
+#     pacman 报：
+#         error: failed retrieving file 'build.db' from disk :
+#         Could not open file .../build-repo/build.db
+#     段名和库名对不上，就是这么个事。
+sudo rm -f "$REPO_DIR/build.db.tar.gz" "$REPO_DIR/build.db"   # repo-add 不带 -f，先清旧的
+sudo repo-add "$REPO_DIR/build.db.tar.gz" "$REPO_DIR"/*.pkg.tar.zst
 
 # ---- 4. 放置到 ISO 内可见的位置 --------------------------------------------
 # 两种方式，二选一（见 README）：
@@ -141,11 +148,12 @@ say "放入 ISO 内的本地仓库目录"
 ISO_REPO="$PROFILE_DIR/airootfs/etc/pacman.d/build-repo"
 sudo mkdir -p "$ISO_REPO"
 sudo cp "$PROFILE_DIR"/build/repo/calamares-*.pkg.tar.zst "$ISO_REPO"/ 2>/dev/null || true
-if compgen -G "$PROFILE_DIR"/build/repo/calamares-shorin.db.tar.gz > /dev/null; then
-  sudo cp "$PROFILE_DIR"/build/repo/calamares-shorin.db.tar.gz "$ISO_REPO"/
+#  ISO 里的仓库也要用 build.db.tar.gz，跟 [build] 段对得上
+if compgen -G "$PROFILE_DIR"/build/repo/build.db.tar.gz > /dev/null; then
+  sudo cp "$PROFILE_DIR"/build/repo/build.db.tar.gz "$ISO_REPO"/
   say "  已复制包与数据库到 $ISO_REPO"
 else
-  warn "  没找到 .db.tar.gz，请在 $PROFILE_DIR/build/repo 下跑一次 repo-add"
+  warn "  没找到 build.db.tar.gz，请在 $PROFILE_DIR/build/repo 下跑一次 repo-add"
 fi
 
 # ---- 5. 核对 ----------------------------------------------------------------
