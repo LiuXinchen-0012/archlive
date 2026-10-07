@@ -950,6 +950,64 @@ if [[ -f "$PROFILE_DIR/pacman.conf" ]]; then
     ok "pacman.conf 里所有 Include 目标都存在"
   fi
 fi
+head_ "10e. workflow 的 YAML 块字面量（run #23 的 0 job 之谜）"
+# run: | 后面跟的内容是【缩进块字面量】。只要其中【任何一行】顶到第 0 列，
+# 块就提前结束，YAML 转而把那一行当普通语法解析。
+#
+# 最常见的触发方式就是在 run: | 里写 heredoc：
+#     cat >> x <<EOF
+#     [build]        ← 必须第 0 列（bash 认 heredoc 结束符只能第 0 列）
+#     EOF            ← 同上
+# 结果：YAML 直接语法错误 → workflow 不合法 → GitHub 连 job 都不建，
+# Actions 页面只有一个孤零零的「Failure」，0 个步骤、日志全空。
+# ——这就是 run #23 的真相，看着像"没跑"，其实是"没编译"。
+#
+# 结论：run: | 里【不许用 heredoc】。要写多行内容就用 printf，
+# 反正 printf 的 \n 是转义序列，不需要真的换行，全都能保持缩进。
+WFYML=0
+while IFS= read -r yf; do
+  [[ -f "$yf" ]] || continue
+  python3 - "$yf" <<'YAMLCHK' || WFYML=1
+import re, sys
+path = sys.argv[1]
+lines = open(path, encoding='utf-8').read().split('\n')
+block = None          # (起始行号, 缩进)
+bad = []
+for i, raw in enumerate(lines, 1):
+    if block is not None:
+        start_indent = block[1]
+        if raw.strip() == '':
+            continue                      # 空行属于块
+        if raw.strip().startswith('#'):
+            continue                      # 注释行：YAML 里注释不参与解析，
+                                           # 第 0 列的注释是合法的，不算块结束
+        ind = len(raw) - len(raw.lstrip(' '))
+        if ind >= start_indent:
+            continue                      # 正常内容
+        # 块在这里结束了，这一行按普通 YAML 解析
+        line = raw.strip()
+        looks_like_key = bool(re.match(r'^[A-Za-z_"\'][^:]*:(\s|$)', line)) or line.startswith('- ')
+        if not looks_like_key:
+            bad.append(f"{path}:{i}: 块字面量在第 {block[0]} 行结束，"
+                       f"但下一行 {line[:40]!r} 不像 YAML 的键/列表项 —— YAML 会解析失败")
+        block = None
+    m = re.match(r'^(\s*)(run|script|body):\s*[|>]\s*$', raw)
+    if m:
+        block = (i, len(m.group(1)) + 1)
+for b in bad:
+    print('BAD:' + b)
+sys.exit(1 if bad else 0)
+YAMLCHK
+done < <(find . -name "*.yml" -o -name "*.yaml" 2>/dev/null | grep -v "^./.git/")
+if [ $WFYML -eq 0 ]; then
+  ok "所有 workflow 的块字面量都正常收尾"
+else
+  bad "workflow 的 YAML 块字面量提前结束 —— workflow 不合法，GitHub 不会创建 job"
+  bad "  → run: | 里不能用 heredoc，heredoc 的内容必须顶到第 0 列"
+  bad "  → 会顶到第 0 列 → 提前结束块 → YAML 语法错误 → 0 job、0 日志"
+  bad "  → 改用 printf '...\n...' 一行写完，保持缩进"
+  FAIL=1
+fi
 head_ "10. Calamares 配置"
 CAL_DIR="$PROFILE_DIR/airootfs/etc/calamares"
 [[ -f "$CAL_DIR/settings.conf" ]] && ok "settings.conf 存在" || bad "缺少 settings.conf"

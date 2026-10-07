@@ -215,24 +215,35 @@ jobs:
       - name: 把本地仓库挂进宿主 pacman.conf
         shell: bash
         run: |
-          # ⚠️ 这里的写法坑过我一次。原来是：
+          # ⚠️ 这里的写法坑过我两次。
+          #
+          # 坑 1：原来是
           #     db=$(ls -1 .../build-repo/*.db.tar.gz | head -1)
           #     echo "Include = $db" >> /etc/pacman.conf
           # pacman.conf 里的 Include 是「把目标当【配置片段】读」，
-          # 不是「加一个软件源」。于是 pacman 去解析那个二进制 db 文件，
-          # 吐出来一屏乱码，然后整个 pacman.conf 解析失败：
+          # 不是「加一个软件源」。pacman 就去解析那个二进制 db 文件，
+          # 吐一屏乱码，然后整个配置解析失败：
           #     warning: config file .../arch-shorin.db.tar.gz, line 1:
           #     directive '...' in section 'options' not recognized.
           #     error: no usable package repositories configured.
-          # 正确做法是老老实实写一个 repo 段落。
+          #
+          # 坑 2：修坑 1 的时候用了 heredoc，结果更离谱 ——
+          #     cat >> /etc/pacman.conf <<EOF
+          #
+          #     [build]          ← 这些行必须在【第 0 列】
+          #     SigLevel = ...   ← 因为 bash 认 heredoc 结束符
+          #     EOF              ← 只能认第 0 列的
+          #
+          #     但整段 run: | 是 YAML 的【缩进块字面量】，
+          #     只要有一行顶到第 0 列，块就提前结束，YAML 立刻变成语法错误，
+          #     workflow 直接不合法 → GitHub 连 job 都不建，
+          #     Actions 页面只显示一个「Failure」，一个步骤都没有，
+          #     日志也是空的。（这就是 run #23 的 0 job 之谜）
+          #
+          # 所以这里【不用 heredoc】，用 printf，全部保持缩进。
           REPO_DIR="$PROFILE_DIR/airootfs/etc/pacman.d/build-repo"
           if ls -1 "$REPO_DIR"/*.db.tar.gz >/dev/null 2>&1; then
-            cat >> /etc/pacman.conf <<EOF
-
-[build]
-SigLevel = Optional TrustAll
-Server = file://$REPO_DIR
-EOF
+            printf '\n[build]\nSigLevel = Optional TrustAll\nServer = file://%s\n' "$REPO_DIR" >> /etc/pacman.conf
             pacman -Sy --noconfirm
             echo "已接入本地仓库: $REPO_DIR"
           else
