@@ -257,6 +257,16 @@ say "生成仓库数据库"
     #     顺手清掉历史遗留的各种 db，避免两个库并存。
     sudo rm -f "$REPO_DIR"/*.db "$REPO_DIR"/*.db.tar.gz "$REPO_DIR"/*.files.tar.gz
     sudo repo-add "$REPO_DIR/build.db.tar.gz" "$REPO_DIR"/*.pkg.tar.zst > /dev/null
+    #  ⚠️ 必须再补两个"无扩展名"的符号链接！
+    #     pacman 对 file:// 源用的 db 扩展名是 .db（不压缩），
+    #     它只会去开 <repo>/build.db，找不到就报：
+    #         error: failed retrieving file 'build.db' from disk :
+    #         Could not open file .../build-repo/build.db
+    #     repo-add 只生成 build.db.tar.gz，不生成 build.db。
+    #     libalpm 是用 libarchive 读库的，gzip 会被透明解压，
+    #     所以指向压缩库的软链完全可用（老版 repo-add 就是这么干的）。
+    sudo ln -sf build.db.tar.gz        "$REPO_DIR/build.db"
+    sudo ln -sf build.files.tar.gz     "$REPO_DIR/build.files"
 sudo cp "$REPO_DIR/build.db.tar.gz" "$ISO_REPO"/
 
 echo

@@ -139,6 +139,9 @@ sudo mkdir -p "$REPO_DIR"
 #     段名和库名对不上，就是这么个事。
 sudo rm -f "$REPO_DIR/build.db.tar.gz" "$REPO_DIR/build.db"   # repo-add 不带 -f，先清旧的
 sudo repo-add "$REPO_DIR/build.db.tar.gz" "$REPO_DIR"/*.pkg.tar.zst
+#  同样要补 .db / .files 软链：pacman 对 file:// 源只找 <repo>/build.db（见 prebuild-aur.sh 里的说明）
+sudo ln -sf build.db.tar.gz    "$REPO_DIR/build.db"
+sudo ln -sf build.files.tar.gz "$REPO_DIR/build.files"
 
 # ---- 4. 放置到 ISO 内可见的位置 --------------------------------------------
 # 两种方式，二选一（见 README）：
@@ -151,6 +154,8 @@ sudo cp "$PROFILE_DIR"/build/repo/calamares-*.pkg.tar.zst "$ISO_REPO"/ 2>/dev/nu
 #  ISO 里的仓库也要用 build.db.tar.gz，跟 [build] 段对得上
 if compgen -G "$PROFILE_DIR"/build/repo/build.db.tar.gz > /dev/null; then
   sudo cp "$PROFILE_DIR"/build/repo/build.db.tar.gz "$ISO_REPO"/
+  sudo ln -sf build.db.tar.gz    "$ISO_REPO/build.db"
+  sudo ln -sf build.files.tar.gz "$ISO_REPO/build.files"
   say "  已复制包与数据库到 $ISO_REPO"
 else
   warn "  没找到 build.db.tar.gz，请在 $PROFILE_DIR/build/repo 下跑一次 repo-add"

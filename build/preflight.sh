@@ -1031,12 +1031,20 @@ for CFG in "$PROFILE_DIR/pacman.conf"; do
       /^Server[[:space:]]*=/ { v=$0; sub(/.*=[[:space:]]*/,"",v); sub(/^file:\/\//,"",v)
                              if (v==target) { print sec; exit } }' "$CFG")
     for s in $SEC; do
-      if compgen -G "$SRV/$s.db" >/dev/null || compgen -G "$SRV/$s.db.tar.gz" >/dev/null; then
-        ok "仓库段 [$s] 有对应的 $s.db*"
+      # 关键：pacman 对 file:// 源用的 db 扩展名是 .db（不压缩），
+      # 它只会去开 <repo>/build.db —— 光有 build.db.tar.gz 是不够的。
+      # libalpm 用 libarchive 读库，gzip 会透明解压，所以软链完全可用。
+      if [ -e "$SRV/$s.db" ]; then
+        ok "仓库段 [$s] 有 $s.db（=$(readlink "$SRV/$s.db" 2>/dev/null || echo '真实文件')）"
+      elif compgen -G "$SRV/$s.db.tar.gz" >/dev/null; then
+        bad "仓库段 [$s] 只有 $s.db.tar.gz，没有 $s.db"
+        bad "  → pacman 对 file:// 源只找 \$repo/$s.db，会报"
+        bad "    failed retrieving file '$s.db' from disk"
+        bad "  → 补个软链: ln -sf $s.db.tar.gz \$REPO_DIR/$s.db"
+        BADDB=1
       else
         bad "仓库段 [$s] 在 $SRV 下找不到 $s.db / $s.db.tar.gz"
-        bad "  → 目录里现有的库：$(ls -1 "$SRV"/*.db.tar.gz 2>/dev/null | xargs -n1 basename 2>/dev/null | tr '\n' ' ')"
-        bad "  → pacman 会报 failed retrieving file '$s.db' from disk"
+        bad "  → 目录里现有的库文件：$(ls -1 "$SRV" 2>/dev/null | grep -E '\.db' | tr '\n' ' ')"
         bad "  → 修: repo-add \"\$REPO_DIR/$s.db.tar.gz\" …（库名必须等于段名）"
         BADDB=1
       fi
