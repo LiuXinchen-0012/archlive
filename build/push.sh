@@ -29,6 +29,20 @@ if [[ ! -d .git ]]; then
   ok "已 git init（分支 main）"
 fi
 
+  # ---- 上传前自检：别把影子副本提交上去 ----
+  # 解压时如果指定错了目标目录（尤其是在仓库目录里面直接 tar -xzf），
+  # 打包文件的顶层目录 archlive/ 会在仓库里多套一层，变成 archlive/archlive/，
+  # git add -A 会把它一起提交。结果是仓库里躺着两份 profile，
+  # CI 的递归检查会抓到那份旧的，报出一堆"我明明改了代码怎么还是旧的"。栽过两次。
+  if [[ -d archlive ]]; then
+    echo "  ❌ 发现仓库里有嵌套的 archlive/ 目录（重复的 profile 副本）"
+    echo "     原因：解压时目标目录选错了，应该指到仓库的【上一层】"
+    echo ""
+    echo "     清理命令：git rm -r --cached archlive && rm -rf archlive"
+    echo ""
+    die "先清理干净再提交"
+  fi
+
 git add -A
 
   # ---- 显式补回可执行位 ----

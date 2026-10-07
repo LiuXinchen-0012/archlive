@@ -833,10 +833,15 @@ if [[ $FAST -eq 0 ]]; then
   MISS=()
   [[ -f "$PROFILE_DIR/build.sh" ]]    || MISS+=("build.sh")
   [[ -f "$PROFILE_DIR/pacman.conf" ]] || MISS+=("pacman.conf（由 build/gen-pacman-conf.sh 生成）")
+  # profiledef.sh 声明了 6 种启动方式，archiso 要按名字找这三个目录。
+  # 缺了它给的错跟"缺目录"毫无关系 —— 这一条就是为了把话说清楚。
+  for d in syslinux grub efiboot; do
+    [[ -d "$PROFILE_DIR/$d" ]] || MISS+=("$d/（由 build/gen-boot-dirs.sh 从 archiso 的 releng 拷入）")
+  done
   if [[ ${#MISS[@]} -gt 0 ]]; then
     bad "profile 根目录缺: ${MISS[*]}"
     bad "  → mkarchiso 会报 realpath 收到空参数，完全看不出是缺文件"
-    bad "  → 修复: bash build/gen-pacman-conf.sh"
+    bad "  → 修复: bash build/gen-pacman-conf.sh && bash build/gen-boot-dirs.sh"
     FAIL=1
   else
     ok "build.sh 与 pacman.conf 都在"

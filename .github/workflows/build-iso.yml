@@ -138,6 +138,7 @@ jobs:
             qt6-base qt6-declarative qt6-svg qt6-tools qt6-translations \
             kcoreaddons kpmcore yaml-cpp libpwquality hwinfo parted \
             archiso squashfs-tools libisoburn dosfstools mtools \
+            grub syslinux \
             nodejs npm
 
           echo "== 造 builder 用户 =="
@@ -228,6 +229,11 @@ jobs:
           # 放在这儿而不是「构建 ISO」那步，是因为第 11 步的自检会检查它存在 ——
           # 生成得太晚的话，自检会先报「缺 pacman.conf」，白折腾一轮。
           bash "$PROFILE_DIR/build/gen-pacman-conf.sh"
+
+          # profiledef.sh 声明了 6 种启动方式，archiso 会去 profile 根目录找
+          # syslinux/ grub/ efiboot/ 这三个配置目录。缺了就中止，
+          # 而且报出来的错跟"缺目录"完全无关。（栽过一次）
+          bash "$PROFILE_DIR/build/gen-boot-dirs.sh"
       - name: 编译 Calamares
         shell: bash
         run: |
@@ -271,6 +277,9 @@ jobs:
           #    这种完全看不出所以然的错。（栽过）
           #    里面的 [build] 源指向本机绝对路径，所以只能现场生成、不能进 git。
           bash "$PROFILE_DIR/build/gen-pacman-conf.sh"
+
+          # 再确认一次引导目录还在（中间任何环节清理过都能补回来）
+          bash "$PROFILE_DIR/build/gen-boot-dirs.sh"
 
           mkarchiso -v -w "$WORK_DIR" -o "$OUT_DIR" "$PROFILE_DIR"
           ls -lh "$OUT_DIR"/*.iso
