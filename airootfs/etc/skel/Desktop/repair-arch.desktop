@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=救援 Arch（快照回滚 / 修内核）
+Name[en]=Repair Arch (snapshot rollback / fix kernel)
+GenericName=系统救援
+Comment=系统开不了机时用：回滚快照、修复内核、重装引导，不丢数据
+Comment[en]=Rescue mode: rollback snapshots, reinstall kernel, fix bootloader
+Exec=/usr/local/bin/repair-arch.sh
+Icon=drive-harddisk
+Terminal=true
+Categories=System;Recovery;
+Keywords=repair;rescue;snapshot;snapper;rollback;救援;回滚;
+StartupNotify=true

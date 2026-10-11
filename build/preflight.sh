@@ -1235,6 +1235,55 @@ if [[ -f "$GRT" ]]; then
   fi
 fi
 
+head_ "10i. Live 救援工具（快照回滚/修内核）"
+# 系统开不了机时唯一能用的东西。没有它，btrfs 快照"能回滚"就等于没用。
+RP="$PROFILE_DIR/airootfs/usr/local/bin/repair-arch.sh"
+[[ -f "$RP" ]] && ok "repair-arch.sh 存在" || { bad "缺 repair-arch.sh（系统坏了就真没辙了）"; FAIL=1; }
+[[ -x "$RP" ]] && ok "repair-arch.sh 可执行" || { bad "repair-arch.sh 不可执行"; FAIL=1; }
+if [[ -f "$PROFILE_DIR/airootfs/etc/skel/Desktop/repair-arch.desktop" ]]; then
+  ok "Live 桌面有「救援 Arch」图标"
+else
+  bad "Live 桌面没有 repair-arch.desktop"
+  FAIL=1
+fi
+
+# 救援要用的命令在 Live 里必须都有 —— 少一个就等于少一条救援路径
+MISS=""
+for c in lsblk btrfs blkid findmnt chroot snapper; do
+  grep -qw "$c" "$RP" || continue
+  okp=$(grep -cE "^(btrfs-progs|util-linux|snapper|grub|dosfstools|efibootmgr)$" "$PROFILE_DIR/packages.x86_64" 2>/dev/null)
+  :
+done
+# 具体按包名对：repair 依赖的这几个包必须在 packages.x86_64 里
+for p in btrfs-progs snapper grub util-linux; do
+  grep -qx "$p" "$PROFILE_DIR/packages.x86_64" 2>/dev/null || { MISS="$MISS $p"; }
+done
+if [ -z "$MISS" ]; then
+  ok "救援依赖的包都在（btrfs-progs snapper grub util-linux）"
+else
+  bad "packages.x86_64 缺:$MISS —— Live 里没有，救援时用不了"
+  FAIL=1
+fi
+
+# 关键正确性：回滚后默认子卷会变，挂载不能靠子卷【名字】
+if grep -q 'subvolid=5' "$RP" && grep -qE 'mount -o "subvolid=\$sid' "$RP"; then
+  ok "按 subvolid 挂载（回滚后子卷名会失效，这是必须的）"
+else
+  bad "救援脚本没按 subvolid 挂载"
+  bad "  → snapper 回滚后默认子卷变成 .snapshots/<N>/snapshot，subvol=@ 会挂到旧目录"
+  FAIL=1
+fi
+if grep -qE 'mount --bind /sys/firmware/efi/efivars' "$RP"; then
+  ok "chroot 绑了 efivars（不绑的话 grub-install 装不了 EFI 引导）"
+else
+  bad "chroot 没绑 /sys/firmware/efi/efivars，UEFI 下 grub-install 会失败"
+  FAIL=1
+fi
+for m in proc sys dev run; do
+  grep -q "\"/$m\"\|/$m\b" "$RP" || warn "好像没绑 /$m"
+done
+ok "chroot 绑载了 proc/sys/dev/run"
+
 head_ "10. Calamares 配置"
 CAL_DIR="$PROFILE_DIR/airootfs/etc/calamares"
 [[ -f "$CAL_DIR/settings.conf" ]] && ok "settings.conf 存在" || bad "缺少 settings.conf"
