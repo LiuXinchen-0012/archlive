@@ -25,24 +25,18 @@ arch="x86_64"
 pacman_conf="pacman.conf"
 
 # ---------------------------------------------------------------------------
-# bootmodes：只有两个，且这个组合是 archiso 91 唯一认的写法。
+# bootmodes：跟【官方 Arch ISO 完全一致】。
 #
-# 踩过的坑（一次 CI 一次报出来）：
-#   1. 之前写了六个：bios.syslinux.mbr / .eltorito / uefi-x64.grub.* /
-#      uefi-x64.systemd-boot.*，结果是——
-#        · mbr 和 eltorito 在 91 里【已废弃】，archiso 会把它们自动删掉、
-#          换成一个 bios.syslinux，写了等于没写
-#        · uefi.grub 和 uefi.systemd-boot 【互斥】，两个都写会直接报
-#          "cannot be used with the 'uefi.grub' bootmode!" 然后中止
-#   2. bios.syslinux 要求 packages.x86_64 里有 syslinux 包，
-#      缺了报 "The 'syslinux' package is missing from the package list!"
-#
-# 所以：BIOS 用 bios.syslinux，UEFI 用 uefi.grub（Ventoy 兼容好、有图形菜单）。
-# 想换成 systemd-boot 就只留 'uefi.systemd-boot'，两个别同时写。
+# ⚠️ 之前这里写的是 'uefi.grub'，ISO 构建出来、文件也齐、GRUB 也能引导内核，
+#    但 initramfs 一直 "Failed to start Switch Root"。
+#    archiso 在 GRUB 模式下有一套额外的定位机制（靠 /boot/<uuid>.uuid 标记文件
+#    + archisosearchuuid=），和 systemd-boot 那条路不是一回事。
+#    我们没必要冒这个险 —— 官方 releng 用的就是下面这个组合，
+#    是被全世界验证过的配置。（栽过，ISO 白等了两轮）
 # ---------------------------------------------------------------------------
 bootmodes=(
   'bios.syslinux'
-  'uefi.grub'
+  'uefi.systemd-boot'
 )
 
 file_permissions=(

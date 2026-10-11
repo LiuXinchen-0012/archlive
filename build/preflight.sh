@@ -117,7 +117,22 @@ if os.path.isdir(buildrepo):
         if m:
             local.add(m.group(1))
 else:
-    print('  WARN    找不到本地 [build] 仓库目录: ' + buildrepo)
+    # ⚠️ build-repo/ 是【构建期产物】：CI 里由 prebuild-aur.sh 生成，
+    #    源 profile 里本来就不该有（tarball 里只有 build-repo.conf）。
+    #    源 profile 上这个目录【必然不存在】，不能据此报包"找不到"。
+    #    真正该问的是：prebuild-aur.sh 会不会把这些包编出来。
+    print('  note    源 profile 里没有 build-repo/（构建期由 prebuild-aur.sh 生成，正常）')
+    pb = os.path.join(profile_root, 'build', 'prebuild-aur.sh')
+    if os.path.exists(pb):
+        mm = re.search(r'^PKGS=\(\s*\n(.*?)\n\s*\)', open(pb, encoding='utf-8').read(), re.S | re.M)
+        if mm:
+            for ln in mm.group(1).split('\n'):
+                ln = ln.split('#')[0].strip()
+                if re.fullmatch(r'[a-z0-9][a-z0-9+._-]{1,}', ln):
+                    local.add(ln)
+            print('  note    改用 prebuild-aur.sh 的 PKGS 判据（%d 个）: %s' % (len(local), ', '.join(sorted(local))))
+    else:
+        print('  FAIL    既没有 build-repo/，也没有 build/prebuild-aur.sh —— 无从判断 [build] 源')
 
 seen, missing, dups, from_local = set(), [], [], []
 for raw in open(pkglist):
@@ -281,6 +296,10 @@ for dirpath, dirnames, filenames in os.walk(root):
         rel = os.path.relpath(path, root)
         if rel.endswith('build/preflight.sh'):
             continue   # 检查器不扫自己：里面的嵌入式 python 会污染结果
+        # mkinitcpio 配置不是脚本：HOOKS=(base archiso …) 里是
+        # initramfs 钩子名，不是包名。拿它比对仓库必然全报"未知包"。
+        if rel.endswith('mkinitcpio.conf') or '/mkinitcpio.conf.' in rel:
+            continue
         try:
             txt = open(path, encoding='utf-8').read()
         except Exception:
@@ -639,6 +658,12 @@ fi
 if [[ $FAST -eq 0 ]]; then   # 依赖已编译产物，--fast 模式跳过
 head_ "9. 本地 [build] 仓库（自编译 Calamares）"
 BUILD_REPO="$PROFILE_DIR/airootfs/etc/pacman.d/build-repo"
+if [[ ! -d "$BUILD_REPO" ]]; then
+  warn "build-repo/ 不存在 —— 源 profile 正常，CI 构建期会由 prebuild-aur.sh 生成"
+  grep -q '^PKGS=(' build/prebuild-aur.sh 2>/dev/null \
+    && ok "  prebuild-aur.sh 有 PKGS= 列表，CI 会编出 [build] 源" \
+    || { bad "  build/prebuild-aur.sh 里没有 PKGS= 列表，CI 将编不出任何 [build] 源包"; FAIL=1; }
+fi
 if [[ -d "$BUILD_REPO" ]]; then
   # ⚠️ 必须确认是【主包】calamares-<ver>-*.pkg.tar.zst，不是 calamares-debug-*。
   #    只有 debug 包的话，ISO 里根本没有安装器，mkarchiso 会直接报
@@ -1283,6 +1308,38 @@ for m in proc sys dev run; do
   grep -q "\"/$m\"\|/$m\b" "$RP" || warn "好像没绑 /$m"
 done
 ok "chroot 绑载了 proc/sys/dev/run"
+
+head_ "10j. initramfs 必须带 archiso 钩子"
+# 少了这个，ISO 构建出来能引导内核，但进不了 Live 桌面：
+#     [FAILED] Failed to start Switch Root.
+# 因为 pacman 装内核时生成的 initramfs 用的是 Arch 默认钩子，
+# 没有 archiso 钩子就找不到也挂不上 airootfs.sfs。
+MK="$PROFILE_DIR/airootfs/etc/mkinitcpio.conf.d/archiso.conf"
+if [[ -f "$MK" ]]; then
+  ok "archiso.conf 在"
+else
+  bad "缺 airootfs/etc/mkinitcpio.conf.d/archiso.conf"
+  bad "  → initramfs 里没有 archiso 钩子 → 找不到也挂不上 airootfs.sfs"
+  bad "  → ISO 引导到内核后就一路 \"Failed to start Switch Root\" 进 emergency shell"
+  bad "  → 官方 releng 同一个路径下有这个文件，照抄即可"
+  FAIL=1
+fi
+if [[ -f "$MK" ]]; then
+  # ⚠️ 别用 \b —— 这个 grep 上 \b 不生效，会误报"少了 block"。
+  #    用空格分隔来卡边界，最省事也最稳。
+  # 先把括号换成空格，base 前面才是空格（原文是 HOOKS=(base udev …)）
+  HOOKLINE=$(grep -m1 '^HOOKS=' "$MK" 2>/dev/null | tr '()' '  ')
+  for h in base archiso block filesystems udev; do
+    case " $HOOKLINE " in
+      *" $h "*)
+        ok "HOOKS 含 $h" ;;
+      *)
+        bad "archiso.conf 的 HOOKS 里少了 $h"
+        bad "  → base=根文件系统  archiso=定位 ISO  block/filesystems=挂 squashfs"
+        FAIL=1 ;;
+    esac
+  done
+fi
 
 head_ "10. Calamares 配置"
 CAL_DIR="$PROFILE_DIR/airootfs/etc/calamares"
