@@ -33,6 +33,22 @@ if [[ -z "$TARGET_USER" ]]; then
 fi
 log "目标用户: $TARGET_USER"
 
+  # 会话名跟着用户在 Live 里选的桌面走（/etc/shorin-desktop 是 post-install 写的）。
+  # 各桌面的会话名不一样；写死 niri-session 的话，装了 hyprland/sway/gnome
+  # 的用户开机就是黑屏 —— 看着像装坏了，其实是这里没跟上。
+  SESSION="niri-session"
+  if [ -f /etc/shorin-desktop ]; then
+    case "$(tr -d '[:space:]' < /etc/shorin-desktop)" in
+      dms-niri) SESSION="dms-session" ;;
+      niri|shorin-niri) SESSION="niri-session" ;;
+      kde)      SESSION="startplasma-x11" ;;
+      gnome)    SESSION="gnome" ;;
+      hyprland) SESSION="Hyprland" ;;
+      sway)     SESSION="sway" ;;
+    esac
+  fi
+  log "开机自动登录的会话 = $SESSION"
+
 # --- 2. 写 greetd 配置 -----------------------------------------------------
 mkdir -p /etc/greetd
 cat > /etc/greetd/config.toml <<EOF
@@ -46,12 +62,12 @@ vt = 1
 # 若把下面 [security] 的 initial_session 注释掉，这里就变成 greeter 用的账号，
 # 登录界面会显示 tuigreet 并允许切换会话。
 user = "$TARGET_USER"
-command = "tuigreet --time --remember --remember-user --cmd niri-session"
+command = "tuigreet --time --remember --remember-user --cmd ${SESSION}"
 
 [security]
-# 跳过 greeter，开机直接进 niri。target 用户由上面的 default_session.user 决定。
+# 跳过 greeter，开机直接进 ${SESSION}。target 用户由上面的 default_session.user 决定。
 # 想恢复登录界面：注释掉下面这行。
-initial_session = "niri-session"
+initial_session = "${SESSION}"
 EOF
 log "已写 /etc/greetd/config.toml"
 

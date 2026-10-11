@@ -419,6 +419,35 @@ else
 fi
 
 # ---------- 3. shell 语法 ----------
+
+# 3b. NoExtract 只能砍"无所谓"的东西
+# 之前把 usr/share/licenses 也砍进去了 —— 那是 GPL/Apache 等协议
+# 硬性要求"分发时必须附带"的许可证全文，砍掉等于违反那些包自己的协议。
+# 官方 archiso releng 的 pacman.conf 里 NoExtract 整行是注释掉的。
+# 至于 locale 更是绝对不能砍：我们有中文界面，砍了界面直接变方块。
+GENFILE="$PROFILE_DIR/build/gen-pacman-conf.sh"
+if [[ -f "$GENFILE" ]]; then
+  GEN=$(grep -E '^[[:space:]]*NoExtract' "$GENFILE" | head -1)
+else
+  GEN=""
+fi
+if [[ -n "$GEN" ]]; then
+  if [[ "$GEN" == *licenses* ]]; then
+    bad "NoExtract 里砍了 usr/share/licenses"
+    bad "  → GPL/Apache 要求分发时附带许可证全文，砍了违反那些包自己的协议"
+    bad "  → 官方 releng 的 NoExtract 是注释掉的；而且它只占 1~3 MB，省不划算"
+    FAIL=1
+  elif [[ "$GEN" == *locale* ]]; then
+    bad "NoExtract 里砍了 usr/share/locale"
+    bad "  → 我们有中文界面，砍掉 locale 中文直接变方块"
+    FAIL=1
+  elif [[ -z "$GEN" ]]; then
+    ok "NoExtract 未启用（保留全部文档）"
+  else
+    ok "NoExtract 只砍 doc/man/info，licenses 和 locale 都保留"
+  fi
+fi
+
 head_ "3. shell 脚本语法"
 while IFS= read -r s; do
   [[ -f "$s" ]] || continue
@@ -1139,6 +1168,71 @@ DisableDownloadTimeout  <-- 带了值，必须去掉等号"
   fi
 else
   warn "找不到 airootfs/etc/pacman.conf"
+fi
+
+head_ "10h. 桌面环境选择功能"
+# 用户可以在 Live 里选装哪个桌面，装机时在 chroot 里直接换好。
+# 这里守三件事：
+#   1. 三个脚本都在（选择器 / 切换器 / post-install 里的接线）
+#   2. 选择器和切换器认识【同一批】桌面 key —— 对不上就是选了个没法切的
+#   3. 各桌面的会话名不写死 —— 写死 niri-session 的话，
+#      选了 hyprland 的用户开机黑屏，看着像装坏了
+SEL="$PROFILE_DIR/airootfs/usr/local/bin/select-desktop.sh"
+SWP="$PROFILE_DIR/airootfs/usr/local/bin/swap-desktop.sh"
+PIS="$PROFILE_DIR/airootfs/usr/local/bin/post-install.sh"
+GRT="$PROFILE_DIR/airootfs/usr/local/bin/setup-greetd.sh"
+
+[[ -f "$SEL" ]] && ok "select-desktop.sh 存在" || { bad "缺 select-desktop.sh"; FAIL=1; }
+[[ -f "$SWP" ]] && ok "swap-desktop.sh 存在" || { bad "缺 swap-desktop.sh"; FAIL=1; }
+[[ -x "$SEL" ]] && ok "select-desktop.sh 可执行" || { bad "select-desktop.sh 不可执行"; FAIL=1; }
+[[ -x "$SWP" ]] && ok "swap-desktop.sh 可执行" || { bad "swap-desktop.sh 不可执行"; FAIL=1; }
+
+# 桌面图标要在 Live 桌面上
+if [[ -f "$PROFILE_DIR/airootfs/etc/skel/Desktop/select-desktop.desktop" ]]; then
+  ok "Live 桌面有「选择桌面环境」图标"
+else
+  bad "Live 桌面没有 select-desktop.desktop，用户没地方选"
+  FAIL=1
+fi
+
+if [[ -f "$SEL" && -f "$SWP" ]]; then
+  # ⚠️ 别在这里把桌面列表写死 —— 写死了这个检查就等于没做：
+  #    加了新桌面（比如 shorin-niri）它会误报"对不上"，
+  #    而真出问题时它也照样放过。两个列表都用通用规则提取。
+  KEYS_SEL=$(grep -oE '^  "[a-z0-9-]+\|' "$SEL" | tr -d ' "|' | sort -u)
+  KEYS_SWP=$(grep -oE '^[[:space:]]+[a-z][a-z0-9-]*\)[[:space:]]+SESSION=' "$SWP" \
+             | sed -E 's/^[[:space:]]+([a-z0-9-]+)\)[[:space:]]+SESSION=/\1/' | sort -u)
+  ONLY_SEL=$(comm -23 <(echo "$KEYS_SEL") <(echo "$KEYS_SWP") | tr '\n' ' ')
+  ONLY_SWP=$(comm -13 <(echo "$KEYS_SEL") <(echo "$KEYS_SWP") | tr '\n' ' ')
+  if [ -n "$ONLY_SEL$ONLY_SWP" ]; then
+    bad "选择器与切换器的桌面列表对不上"
+    [ -n "$ONLY_SEL" ] && bad "  只有选择器有: $ONLY_SEL（用户能选，但 switch 时不认）"
+    [ -n "$ONLY_SWP" ] && bad "  只有切换器有: $ONLY_SWP"
+    FAIL=1
+  else
+    ok "选择器与切换器的桌面列表一致: $(echo "$KEYS_SEL" | tr '\n' ' ')"
+  fi
+fi
+
+if [[ -f "$PIS" ]]; then
+  grep -q 'shorin-desktop-choice' "$PIS" && ok "post-install 读 Live 的选择结果" \
+    || { bad "post-install 没读 /tmp/shorin-desktop-choice（选了也不会生效）"; FAIL=1; }
+  grep -q 'swap-desktop.sh' "$PIS" && ok "post-install 会调用 swap-desktop.sh" \
+    || { bad "post-install 没调用 swap-desktop.sh"; FAIL=1; }
+  grep -q '/etc/shorin-desktop' "$PIS" && ok "选择结果会写进目标系统" \
+    || { bad "没把选择写进 /etc/shorin-desktop"; FAIL=1; }
+fi
+
+if [[ -f "$GRT" ]]; then
+  # setup-greetd.sh 里如果还有写死的 initial_session = "niri-session" 就是坑
+  if grep -qE '^[[:space:]]*initial_session = "niri-session"' "$GRT"; then
+    bad "setup-greetd.sh 把会话名写死成 niri-session 了"
+    bad "  → 选了 hyprland/sway/gnome 的用户开机就是黑屏"
+    bad "  → 必须按 /etc/shorin-desktop 取"
+    FAIL=1
+  else
+    ok "greetd 的会话名是按选择动态取的"
+  fi
 fi
 
 head_ "10. Calamares 配置"

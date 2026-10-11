@@ -193,64 +193,41 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4. DMS 桌面
+# 4. 桌面环境：按用户在 Live 里选的那个来
 # ---------------------------------------------------------------------------
-# 重要背景（2026-10-05 实测 shorin-dms-niri-git r142.ccf9e8d-2）：
-#   * 官方仓库里已经没有 dms-shell-niri 了（1.5.3 的 split 包被移除，
-#     现在只有 dms-shell，自带 dms-shell-compositor）。
-#   * DMS 官方的 greeter 功能在发行版包中被 --disable，
-#     所以 dms greeter / `dms greeter install` 不可用，只能 greetd-tuigreet。
-#   * shorin-dms-niri-git 的 15 个核心依赖里 14 个在官方仓库（很快），
-#     只有 dsearch-bin / dgop / xwayland-satellite / 它自己 需要 AUR 编译。
-#   * 它的 source 是 git+https://github.com/SHORiN-KiWATA/...
-#     GitHub 在国内就是"服务器在 Google" —— 装机时 clone 会挂。
+# 用户在 Live 桌面点【选择桌面环境】时，select-desktop.sh 把选择写到
+#     /tmp/shorin-desktop-choice        （Live 环境里）
+# 本脚本正是在 Live 环境里跑的（shellprocess 标了 dontChroot），
+# 所以读得到。读不到就退回 dms-niri —— 也就是原方案的固定行为。
 #
-# 因此这里的策略是【装机全程不碰 GitHub】：
-#   AUR 包在构建机上由 build/prebuild-aur.sh 预编译好，放进本地 [build] 仓库，
-#   这里用 pacman -U 装。全程零 AUR 网络请求。
-#   退而求其次才退回在线 AUR（需要代理）。
-# ---------------------------------------------------------------------------
-SHORIN_MODE_DEFAULT="$(cat /etc/shorin-build-mode 2>/dev/null | tr -d '[:space:]')"
-[[ -n "$SHORIN_MODE_DEFAULT" ]] || SHORIN_MODE_DEFAULT="skeleton"
-SHORIN_MODE="${SHORIN_MODE:-$SHORIN_MODE_DEFAULT}"
-log "SHORIN_MODE = $SHORIN_MODE（来源：${SHORIN_MODE:+$SHORIN_MODE_DEFAULT}，可被环境变量覆盖）"
-
-case "$SHORIN_MODE" in
-  full)
-    log "SHORIN_MODE=full —— 安装 Shorin DMS Niri"
-
-    # 依赖：14 个核心依赖里 13 个在官方仓库，dsearch-bin 走 [build]
-    if ch "pacman -S --noconfirm --needed \\
-             dms-shell niri quickshell matugen cava wl-clipboard cliphist \\
-             xdg-desktop-portal-gnome xwayland-satellite libnotify \\
-             power-profiles-daemon qt5-multimedia cups-pk-helper kimageformats \\
-             dgop dsearch-bin"; then
-      log "Shorin 运行时依赖安装完成"
-    else
-      warn "部分依赖安装失败，继续"
-    fi
-
-    # 预编译的 shorin-dms-niri-git 本体
-    if ch "pacman -U --noconfirm --needed shorin-dms-niri-git"; then
-      log "shorin-dms-niri-git（本地预编译包）安装成功"
-    else
-      warn "本地包安装失败 —— 回退到在线 AUR（需要代理，否则大概率失败）"
-      if ch "paru -S --noconfirm --needed shorin-dms-niri-git"; then
-        log "在线 AUR 安装成功"
-      else
-        warn "shorin-dms-niri-git 安装失败，保留官方 dms-shell + niri 方案"
-      fi
-    fi
-    ;;
-
-  skeleton)
-    log "SHORIN_MODE=skeleton —— 官方 dms-shell + niri，不装 shorin dotfiles"
-    ;;
-
-  *)
-    warn "未知 SHORIN_MODE=$SHORIN_MODE，退回 skeleton"
-    ;;
+# 真正的换桌面动作交给 swap-desktop.sh 在【chroot 里】做。
+# 换在 chroot 里而不是首次开机，是刻意的：那时系统还没跑起来，
+# pacman -Rns 删 Plasma 不会碰到"正在用的桌面"，失败也不会砖机。
+# 原方案放在首次开机（shorin-remove-kde.sh），是因为当时只有一种选择；
+# 现在用户能选了，就没必要再让所有人先启动一次 KDE。
+CHOICE_FILE=/tmp/shorin-desktop-choice
+DESKTOP="dms-niri"
+if [[ -f "$CHOICE_FILE" ]]; then
+  DESKTOP="$(tr -d '[:space:]' < "$CHOICE_FILE")"
+fi
+case "$DESKTOP" in
+  dms-niri|shorin-niri|niri|kde|gnome|hyprland|sway) ;;
+  *) warn "桌面选择 [$DESKTOP] 不认识，退回 dms-niri"; DESKTOP="dms-niri" ;;
 esac
+log "用户选择的桌面 = $DESKTOP"
+
+# 写进目标系统，swap-desktop.sh 和 setup-greetd.sh 都读它
+printf '%s' "$DESKTOP" > /tmp/_de.$$
+ch "cp /tmp/_de.$$ /etc/shorin-desktop && rm -f /tmp/_de.$$" \
+  || warn "写入 /etc/shorin-desktop 失败（会退回默认值）"
+rm -f /tmp/_de.$$
+
+if ch "/usr/local/bin/swap-desktop.sh"; then
+  log "桌面切换完成（日志：/var/log/shorin-desktop-swap.log）"
+else
+  warn "swap-desktop.sh 返回非 0 —— 系统可能仍是 Plasma"
+  warn "  详情看 /var/log/shorin-desktop-swap.log"
+fi
 
 # ---------------------------------------------------------------------------
 # 4b. 预装常用软件

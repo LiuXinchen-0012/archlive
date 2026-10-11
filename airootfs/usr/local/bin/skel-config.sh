@@ -245,16 +245,46 @@ EOF
 if [ -d /usr/share/shorin-dms-niri ]; then
   log "集成 Shorin DMS Niri dotfiles 到 /etc/skel"
   SRC=/usr/share/shorin-dms-niri
-  # .config 整体拷（但排除 fcitx5/conf）
-  if [ -d "$SRC/.config" ]; then
-    ( cd "$SRC" && find .config -path './.config/fcitx5/conf' -prune -o -print0 ) \
-      | ( cd "$SRC" && tar --null -cf - -T - 2>/dev/null ) \
+    # 用户选了 shorin-niri（作者的 niri 配置，但不要 DMS 外壳）时，
+    # 把 dotfiles 里的 DMS 专属目录剔掉 —— 留着的话 niri 启动会去加载
+    # 一个不存在的 quickshell，键位里 Mod+D 之类也指不到东西。
+    # 分界线在 /etc/shorin-desktop，由 post-install.sh 写入。
+    SKIP_DMS=0
+    if [ -f /etc/shorin-desktop ] && [ "$(tr -d "[:space:]" < /etc/shorin-desktop)" = "shorin-niri" ]; then
+      SKIP_DMS=1
+      log "检测到 shorin-niri —— dotfiles 里的 dms/ 目录将被剔除"
+    fi
+# ⚠️⚠️ 这里踩过两个坑，两个都是"看起来对、其实完全没生效"：
+#
+# 坑 1：-path 的模式必须跟 find【实际打印的路径】对得上。
+#      find .config 打印的是 ".config/xxx" —— 【不带 ./ 前缀】。
+#      老代码写 -path './.config/fcitx5/conf'，从来没匹配上。
+#      现在统一用 '*...' 后缀通配，跟前缀无关。
+#
+# 坑 2：tar -T - 读到【目录】时会整个递归打包它！
+#      所以就算 find 把 .config/fcitx5/conf prune 掉了，
+#      只要它的父目录 .config/fcitx5 还在列表里，tar 照样把 conf/ 全扫进去。
+#      —— 而且同一份文件既在目录递归里、又在文件列表里，
+#      tar 还会打成硬链接（hrw-），白白多占一份空间。
+#      正解：find 只吐【文件和符号链接】，永远不吐目录；
+#      再给 tar 加 --no-recursion 双保险。
+if [ -d "$SRC/.config" ]; then
+  if [ "$SKIP_DMS" = 1 ]; then
+    ( cd "$SRC" && find .config -type d \( \
+        -path '*fcitx5/conf' -o -path '*niri/dms' -o -path '*quickshell/dms' \
+        \) -prune -o \( -type f -o -type l \) -print0 ) \
+      | ( cd "$SRC" && tar --null -cf - --no-recursion -T - 2>/dev/null ) \
+      | ( cd "$SKEL" && tar -xf - 2>/dev/null ) && log "  .config 已合并（已剔 DMS 目录）"
+  else
+    ( cd "$SRC" && find .config -type d -path '*fcitx5/conf' -prune -o \( -type f -o -type l \) -print0 ) \
+      | ( cd "$SRC" && tar --null -cf - --no-recursion -T - 2>/dev/null ) \
       | ( cd "$SKEL" && tar -xf - 2>/dev/null ) && log "  .config 已合并"
   fi
+fi
   # .local 只拷脚本/配置，跳过大于 1MB 的二进制
   if [ -d "$SRC/.local" ]; then
     ( cd "$SRC" && find .local -type f -size -1M -print0 ) \
-      | ( cd "$SRC" && tar --null -cf - -T - 2>/dev/null ) \
+      | ( cd "$SRC" && tar --null -cf - --no-recursion -T - 2>/dev/null ) \
       | ( cd "$SKEL" && tar -xf - 2>/dev/null ) && log "  .local（<1MB 的部分）已合并"
   fi
   # 记一笔，方便用户知道还差什么

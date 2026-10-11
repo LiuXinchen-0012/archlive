@@ -50,7 +50,14 @@ CheckSpace
 #
 #    ⚠️ 千万别顺手把 usr/share/locale 也加进来 ——
 #    我们要中文界面，砍了 locale 中文直接变方块。
-NoExtract = usr/share/doc/* usr/share/man/* usr/share/info/* usr/share/licenses/*
+#
+#    ⚠️ 也【不要】砍 usr/share/licenses：
+#    GPL / Apache 那些协议要求分发作品时必须附带许可证全文，
+#    官方 archiso releng 的 pacman.conf 里 NoExtract 整行是【注释掉的】，
+#    也就是说官方 ISO 是带着许可证发布的。
+#    砍掉它属于违反被砍那些包自己的协议，而且它只占 1~3 MB ——
+#    4.2 GB 的 ISO 里完全可以忽略，省这点不划算。
+NoExtract = usr/share/doc/* usr/share/man/* usr/share/info/*
 
 [core]
 Include = /etc/pacman.d/mirrorlist

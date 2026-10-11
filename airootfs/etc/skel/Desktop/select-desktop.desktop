@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=① 选择桌面环境
+Name[en]=1. Choose Desktop Environment
+GenericName=桌面环境选择
+Comment=装完想用哪个桌面？先在这里选，安装时会直接换好，不用重启两次
+Comment[en]=Pick your desktop before installing; it gets swapped in automatically
+Exec=/usr/local/bin/select-desktop.sh
+Icon=preferences-desktop-display
+Terminal=false
+Categories=System;Settings;
+Keywords=desktop;niri;kde;gnome;hyprland;sway;桌面;选择;
+StartupNotify=true

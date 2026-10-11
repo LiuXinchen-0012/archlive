@@ -1,16 +1,25 @@
 ARCH_SHORIN 装机步骤
 ====================
 
-① 【配置代理】     ← 先做这个（如果你的网络需要代理）
+① 【选择桌面环境】    ← 新增的，就这一步
+   双击 → 选你要用的桌面（KDE / Niri / GNOME / Hyprland / Sway / DMS Niri）
+   不选也能往下走，默认是 Shorin DMS Niri。
+   选完之后安装器会【直接】把系统换成你选的桌面，不用重启两次。
+
+② 【配置代理】       ← 网络需要代理才做
    双击 → 粘贴订阅链接 → 等它装完
    看到"✅ 代理配置成功"再进行下一步
 
-② 【安装 Arch Linux】
-   双击 → 填订阅（已在①填过会自动带出）→ 跟着向导走
+③ 【安装 Arch Linux】
+   双击 → 跟着向导走
 
-③ 装完重启。第一次开机还是 KDE，屏幕会提示你再重启一次。
-   第二次重启就进 Shorin DMS Niri 了。
+④ 装完重启。
+   【首次开机直接进你选的桌面】，不再需要第二次重启。
+
+   日志在装好后的系统里：
+     /var/log/shorin-postinstall.log
+     /var/log/shorin-desktop-swap.log
 
 装不上的话，不用从头再来 —— 先看这两个文件：
-  /tmp/shorin-netcheck.txt     网络体检报告
-  /tmp/shorin-proxy-setup.log  代理配置日志
+    /tmp/shorin-netcheck.txt     网络体检报告
+    /tmp/shorin-proxy-setup.log  代理配置日志
