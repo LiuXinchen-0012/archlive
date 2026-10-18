@@ -1341,6 +1341,39 @@ if [[ -f "$MK" ]]; then
   done
 fi
 
+head_ "10k. initramfs 的 archiso 钩子必须装得进来"
+# mkinitcpio 主包【不包含】archiso 钩子。那串钩子文件
+# (archiso / archiso_loop_mnt / archiso_pxe_*) 由 mkinitcpio-archiso 提供，
+# 装在 /usr/lib/initcpio/install/ 下。
+#
+# 缺了它，mkinitcpio【静默跳过】不存在的钩子（只 WARN 不 FAIL），
+# 于是 initramfs 里没有 archiso 钩子 → 没有 mount_handler →
+# 没人去挂 airootfs.sfs，开机的表现是：
+#     :: running hook [memdisk]
+#     :: running hook [on real root]      ← 从 memdisk 之后直接断掉
+#     mount: "/sysroot": wrong fs type, bad option, bad superblock on ,
+#     ERROR: Failed to mount "" on real root
+# 挂载源是【空的】，因为压根没有钩子去解析 archisosearchuuid=。
+# 官方 releng 的 packages.x86_64 里 mkinitcpio / mkinitcpio-archiso /
+# mkinitcpio-nfs-utils 三个是一起列的。
+MKA_N=$(grep -cE '^[[:space:]]*mkinitcpio-archiso[[:space:]]*$' "$PROFILE_DIR/packages.x86_64" 2>/dev/null || echo 0)
+if [[ "$MKA_N" -gt 0 ]]; then
+  ok "packages.x86_64 里有 mkinitcpio-archiso"
+else
+  bad "packages.x86_64 里【没有】mkinitcpio-archiso"
+  bad "  → archiso / archiso_loop_mnt / archiso_pxe_* 这些 initramfs 钩子不会被安装"
+  bad "  → mkinitcpio 会静默跳过它们（只 WARN 不 FAIL），initramfs 里没有 archiso 钩子"
+  bad "  → 开机停在 \"Failed to start Switch Root\"，挂载源是空的"
+  bad "  → 官方 releng 里它和 mkinitcpio、mkinitcpio-nfs-utils 三个一起列的"
+  FAIL=1
+fi
+# 钩子文件本身也要在（conf.d 里的 HOOKS 列表只是"想用"，文件得真存在）
+MK="$PROFILE_DIR/airootfs/etc/mkinitcpio.conf.d/archiso.conf"
+if [[ -f "$MK" ]]; then
+  NHOOKS=$(grep -m1 '^HOOKS=' "$MK" | tr '()' '  ' | wc -w)
+  ok "archiso.conf 声明了 ${NHOOKS} 个钩子（要有提供方才有意义，见上）"
+fi
+
 head_ "10. Calamares 配置"
 CAL_DIR="$PROFILE_DIR/airootfs/etc/calamares"
 [[ -f "$CAL_DIR/settings.conf" ]] && ok "settings.conf 存在" || bad "缺少 settings.conf"

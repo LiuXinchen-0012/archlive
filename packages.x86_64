@@ -82,6 +82,26 @@ snap-pac
 inotify-tools
 ## 注意：mkinitcpio-videomode / mkinitcpio-firmware 已并回 mkinitcpio 主包
 mkinitcpio
+## ⚠️⚠️【必须有】mkinitcpio-archiso —— initramfs 里 archiso 那串钩子的来源
+##
+##   栽过三轮的坑：只有 mkinitcpio 主包是不够的。
+##   archiso / archiso_loop_mnt / archiso_pxe_* 这些 run_hook 文件
+##   都由【这个包】安装，装在 /usr/lib/initcpio/install/ 下。
+##   缺了它，mkinitcpio 会静默跳过这些钩子（只 WARN 不 FAIL），
+##   于是 initramfs 里没有 archiso 钩子 →
+##   没有 mount_handler → 没人去挂 airootfs.sfs →
+##       :: running hook [memdisk]
+##       :: running hook [on real root]        ← 从 memdisk 之后直接断掉
+##       mount: "/sysroot": wrong fs type ... bad superblock on ,
+##       ERROR: Failed to mount "" on real root
+##   挂载源是【空的】，因为压根没有钩子去解析 archisosearchuuid=。
+##
+##   官方 releng packages.x86_64 里这三个一起在：
+##       mkinitcpio
+##       mkinitcpio-archiso      ← 就是它
+##       mkinitcpio-nfs-utils
+mkinitcpio-archiso
+mkinitcpio-nfs-utils
 
 ## —— 音频 ——
 pipewire
